@@ -1,1 +1,25 @@
-fastapi[all]
+fastapi
+uvicorn
+python-dotenv==1.0.0
+supabase
+python-multipart  # for file uploads
+
+# AI dependencies
+langchain
+langgraph
+openai
+elevenlabs
+pydantic-ai-slim[openai]
+
+# utils
+moviepy==1.0.3
+bs4
+pillow # for images
+requests # for downloading fonts
+
+# google
+google-auth-oauthlib
+google-api-python-client 
+
+# tracing
+langfuse

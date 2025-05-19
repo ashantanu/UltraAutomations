@@ -1,0 +1,239 @@
+import os
+from datetime import datetime, timedelta
+from typing import List, Optional, TypedDict
+from pydantic import BaseModel, Field
+from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIModel
+from openai import OpenAI
+from app.utils.gmail_oauth import get_emails_from_gmail
+from app.utils.logging_utils import get_logger
+from dotenv import load_dotenv
+from langgraph.graph import Graph, StateGraph, END
+from langfuse.callback import CallbackHandler
+from langfuse import Langfuse
+
+# Initialize logger
+logger = get_logger(__name__)
+
+# Load environment variables
+load_dotenv()
+EMAIL_BODY_CHAR_LIMIT = 2000
+MODEL = 'openai:gpt-4.1'
+
+# Initialize clients
+openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+
+langfuse_client = Langfuse(
+    public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+    secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+    host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+)
+
+# Constants
+SOURCES = ['news@smol.ai', 'news@alphasignal.ai']
+PROMPT_NAME = "news_summarizer"  # Name of the prompt in Langfuse
+
+class EmailContent(BaseModel):
+    """Model for structured email content."""
+    sender: str
+    subject: str
+    date: datetime
+    body: str
+    source: str = Field(..., description="Source of the email (smol.ai or alphasignal.ai)")
+
+class SummaryOutput(BaseModel):
+    """Model for the OpenAI-generated summary."""
+    title: str = Field(..., description="Title of the summary in format 'OFA Daily Summary [DATE]'")
+    audio_script: str = Field(..., description="15-minute podcast script summarizing the key points")
+    description: str = Field(..., description="YouTube video description with citations")
+    citations: List[str] = Field(..., description="List of citations in format '[Source] - [Title]'")
+
+class FinalOutput(BaseModel):
+    """Model for the final combined output."""
+    date: datetime
+    emails_processed: int
+    summary: SummaryOutput
+
+class AgentState(TypedDict):
+    """State for the LangGraph agent."""
+    emails: List[EmailContent]
+    summary: Optional[SummaryOutput]
+    error: Optional[str]
+    trace_id: str
+
+def fetch_emails_node(state: AgentState) -> AgentState:
+    """Node for fetching emails."""
+    try:
+        logger.info("Starting email fetch process")
+        # Calculate date range (last 24 hours)
+        end_date = datetime.now()
+        
+        # Format date for Gmail query
+        date_query = f"after:{end_date.strftime('%Y/%m/%d')}"
+        logger.debug(f"Date query: {date_query}")
+        
+        all_emails = []
+        for source in SOURCES:
+            logger.info(f"Fetching emails from source: {source}")
+            # Get emails from each source
+            emails = get_emails_from_gmail(
+                query=f'from:{source} {date_query}',
+                max_results=10
+            )
+            
+            # Convert to EmailContent model
+            for email in emails:
+                all_emails.append(EmailContent(
+                    sender=email['sender'],
+                    subject=email['subject'],
+                    date=datetime.strptime(email['date'], '%a, %d %b %Y %H:%M:%S %z'),
+                    body=email['body'],
+                    source=source
+                ))
+            logger.info(f"Found {len(emails)} emails from {source}")
+
+        if not all_emails:
+            logger.warning("No emails found in the last 24 hours")
+            raise ValueError("No emails found in the last 24 hours")
+
+        logger.info(f"Total emails fetched: {len(all_emails)}")
+        state["emails"] = all_emails
+        return state
+
+    except Exception as e:
+        logger.error(f"Error in fetch_emails_node: {str(e)}", exc_info=True)
+        state["error"] = str(e)
+        return state
+
+async def generate_summary_node(state: AgentState) -> AgentState:
+    """Node for generating summary."""
+    return_state = {}
+    try:
+        logger.info("Starting summary generation")
+        # Prepare email content for the prompt
+        email_content = "\n\n".join([
+            f"From: {email.source}\n"
+            f"Subject: {email.subject}\n"
+            f"Date: {email.date}\n"
+            f"Content: {email.body[:EMAIL_BODY_CHAR_LIMIT] + ('...' if len(email.body) > EMAIL_BODY_CHAR_LIMIT else '')}"
+            for email in state["emails"]
+        ])
+        logger.debug(f"Prepared email content with {len(state['emails'])} emails")
+        logger.debug(f"Email content length: {len(email_content)} characters")
+
+        if not email_content:
+            logger.warning("No email content to process")
+            return {}
+
+        # Get the prompt from Langfuse
+        logger.info("Fetching prompt from Langfuse")
+        prompt_obj = langfuse_client.get_prompt(PROMPT_NAME)
+        if not prompt_obj:
+            logger.error(f"Prompt '{PROMPT_NAME}' not found in Langfuse")
+            raise ValueError(f"Prompt '{PROMPT_NAME}' not found in Langfuse")
+        
+        logger.info(f"Retrieved prompt from Langfuse: {PROMPT_NAME}")
+        
+        # Format the prompt with the email content
+        formatted_prompt = prompt_obj.prompt.format(email_content=email_content)
+        logger.debug(f"Formatted prompt length: {len(formatted_prompt)} characters")
+
+        # Use Pydantic AI to get structured output
+        logger.info("Generating summary using Pydantic AI")
+        agent = Agent(MODEL, output_type=SummaryOutput)
+        logger.debug(f"Initialized Pydantic AI agent with model: {MODEL}")
+        
+        result = await agent.run(formatted_prompt)
+        logger.debug(f"Pydantic AI usage: {result.usage()}")
+        
+        logger.info("Successfully generated summary")
+        logger.debug(f"Generated title: {result.output.title}")
+        logger.debug(f"Number of citations: {len(result.output.citations)}")
+        logger.debug(f"Audio script length: {len(result.output.audio_script)} characters")
+        
+        return_state["summary"] = result.output
+        return return_state
+
+    except Exception as e:
+        logger.error(f"Error in generate_summary_node: {str(e)}", exc_info=True)
+        return_state["error"] = str(e)
+        return return_state
+
+def build_graph() -> Graph:
+    """Build the LangGraph workflow."""
+    logger.info("Building workflow graph")
+    # Create the graph
+    workflow = StateGraph(AgentState)
+
+    # Add nodes
+    workflow.add_node("fetch_emails", fetch_emails_node)
+    workflow.add_node("generate_summary", generate_summary_node)
+
+    # Add edges
+    workflow.add_edge("fetch_emails", "generate_summary")
+    workflow.add_edge("generate_summary", END)
+
+    # Set entry point
+    workflow.set_entry_point("fetch_emails")
+
+    # Compile the graph
+    logger.info("Compiling workflow graph")
+    return workflow.compile()
+
+# Initialize the graph
+graph = build_graph()
+
+async def generate_ai_news_summary() -> FinalOutput:
+    """
+    Generate the daily AI news summary.
+    
+    Returns:
+        FinalOutput containing the summary and metadata
+    """
+    logger.info("Starting AI news summary generation")
+    try:
+        # Initialize state
+        state: AgentState = {
+            "emails": [],
+            "summary": None,
+            "error": None,
+            "trace_id": None
+        }
+        logger.debug("Initialized agent state")
+
+        # Run the graph
+        logger.info("Invoking workflow graph")
+        langfuse_handler = CallbackHandler(
+            secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+            public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+            host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        )
+        logger.debug("Initialized Langfuse handler")
+        
+        final_state = await graph.ainvoke(
+            state, 
+            config={
+                "callbacks": [langfuse_handler],
+                "run_name": "ai_news_summary"
+            }
+        )
+        logger.debug(f"Graph execution completed. State: {final_state}")
+
+        if final_state["error"]:
+            logger.error(f"Error in workflow: {final_state['error']}")
+            raise Exception(final_state["error"])
+
+        # Create final output
+        output = FinalOutput(
+            date=datetime.now(),
+            emails_processed=len(final_state["emails"]),
+            summary=final_state["summary"]
+        )
+        logger.debug(f"Created final output with {output.emails_processed} emails processed")
+
+        logger.info(f"Successfully generated summary with {output.emails_processed} emails processed")
+        return output
+
+    except Exception as e:
+        logger.error(f"Failed to generate daily summary: {str(e)}", exc_info=True)
+        raise Exception(f"Failed to generate daily summary: {str(e)}") 

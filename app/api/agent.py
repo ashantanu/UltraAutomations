@@ -1,0 +1,103 @@
+from fastapi import APIRouter
+from pydantic import BaseModel
+from app.core.agents.text_to_youtube import text_to_youtube
+from app.core.agents.ai_news_summarizer import generate_ai_news_summary
+from app.core.agents.email_to_youtube import email_to_youtube
+from langfuse.callback import CallbackHandler
+from typing import Optional
+import os
+
+router = APIRouter()
+
+# Initialize Langfuse handler
+langfuse_handler = CallbackHandler(
+    secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+    public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+    host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+)
+
+class YouTubeUploadRequest(BaseModel):
+    text: str
+    title: str
+    description: str
+    thumbnail_path: Optional[str] = None
+
+@router.post("/youtube-upload")
+async def youtube_upload(request: YouTubeUploadRequest):
+    """
+    Endpoint to convert text to video and upload to YouTube.
+    
+    Args:
+        request (YouTubeUploadRequest): The request containing text, title, and description
+        
+    Returns:
+        dict: A dictionary containing the result of the operation
+    """
+    try:
+        result = text_to_youtube(
+            text=request.text,
+            title=request.title,
+            description=request.description,
+            thumbnail_path=request.thumbnail_path
+        )
+        return {
+            "status": "success",
+            "message": "Video uploaded successfully",
+            "data": result
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+@router.post("/news-summary")
+async def news_summary():
+    """
+    Endpoint to generate daily AI news summary.
+    
+    Returns:
+        dict: A dictionary containing the summary and metadata
+    """
+    try:
+        result = await generate_ai_news_summary()
+        return {
+            "status": "success",
+            "message": "News summary generated successfully",
+            "data": {
+                "date": result.date.isoformat(),
+                "emails_processed": result.emails_processed,
+                "summary": {
+                    "title": result.summary.title,
+                    "audio_script": result.summary.audio_script,
+                    "description": result.summary.description,
+                    "citations": result.summary.citations
+                }
+            }
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+@router.post("/email-to-youtube")
+async def email_to_youtube_endpoint():
+    """
+    Endpoint to generate a YouTube video from email summaries.
+    
+    Returns:
+        dict: A dictionary containing the summary and video details
+    """
+    try:
+        result = await email_to_youtube()
+        return {
+            "status": "success",
+            "message": "Email-to-YouTube flow completed successfully",
+            "data": result
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        } 
