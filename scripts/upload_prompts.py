@@ -12,6 +12,15 @@ langfuse = Langfuse(
     host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
 )
 
+def load_prompt_from_file(filepath):
+    """Load prompt content from a text file."""
+    try:
+        with open(filepath, 'r') as f:
+            return f.read().strip()
+    except Exception as e:
+        print(f"Error loading prompt from {filepath}: {str(e)}")
+        return None
+
 # List of prompts to upload
 PROMPTS = [
     {
@@ -19,21 +28,15 @@ PROMPTS = [
         "description": "Prompt for generating daily AI news summaries in podcast format",
         "tags": ["news", "summarizer", "podcast"],
         "type": "text",  # text or chat based on langfuse docs
-        "prompt": """You are an AI news summarizer creating a daily podcast script. 
-Analyze the following emails and create a concise summary focusing on AI agents, startups, and key developments.
-Keep hardware updates minimal. The reader has background knowledge, so be direct and to the point.
-Format the output as a 5-minute podcast script.
+        "prompt": load_prompt_from_file("scripts/prompts/news_summarizer.txt")
 
-Emails to analyze:
-{email_content}
-
-Please provide:
-1. A title in the format "OFA Daily Summary [TODAY'S DATE]"
-2. A concise podcast script (5 minutes)
-3. A YouTube description with citations
-4. A list of citations in the format "[Source] - [Title]"
-
-Focus on the most important developments that would interest someone following AI agents and startups."""
+    },
+    {
+        "name": "news-summary-tts-instructions",
+        "description": "Instructions for TTS voice and presentation style for AI news summaries",
+        "tags": ["news", "summarizer", "podcast", "tts", "voice"],
+        "type": "text",
+        "prompt": load_prompt_from_file("scripts/prompts/news-summary-tts-instructions.txt")
     }
     # Add more prompts here as needed
 ]
@@ -42,6 +45,10 @@ def upload_prompts():
     """Upload all prompts to Langfuse."""
     for prompt_data in PROMPTS:
         try:
+            if prompt_data["prompt"] is None:
+                print(f"Skipping prompt '{prompt_data['name']}' due to missing content")
+                continue
+                
             prompt_obj = langfuse.create_prompt(
                 name=prompt_data["name"],
                 prompt=prompt_data["prompt"],

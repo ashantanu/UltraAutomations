@@ -30,7 +30,7 @@ langfuse_client = Langfuse(
 )
 
 # Constants
-SOURCES = ['news@smol.ai', 'news@alphasignal.ai']
+SOURCES = ['news@alphasignal.ai']
 PROMPT_NAME = "news_summarizer"  # Name of the prompt in Langfuse
 
 class EmailContent(BaseModel):

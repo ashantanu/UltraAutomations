@@ -10,6 +10,7 @@ from langgraph.graph import StateGraph, END
 from moviepy.editor import ImageClip, AudioFileClip
 from openai import OpenAI
 import base64
+from langfuse import Langfuse
 from langfuse.callback import CallbackHandler
 
 # Ensure data directory exists
@@ -34,6 +35,7 @@ VOICE_ID = "kPzsL2i3teMYv0FxEYQ6"
 LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY")
 LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY")
 LANGFUSE_HOST = os.getenv("LANGFUSE_HOST")
+PROMPT_NAME = "news-summary-tts-instructions"
 
 # Initialize Langfuse callback handler
 langfuse_handler = CallbackHandler(
@@ -41,6 +43,13 @@ langfuse_handler = CallbackHandler(
     public_key=LANGFUSE_PUBLIC_KEY,
     host=LANGFUSE_HOST
 )
+
+langfuse_client = Langfuse(
+    public_key=LANGFUSE_PUBLIC_KEY,
+    secret_key=LANGFUSE_SECRET_KEY,
+    host=LANGFUSE_HOST
+)
+
 
 logger.info("Initializing API clients...")
 # Initialize clients
@@ -70,7 +79,7 @@ def text_to_audio(state: AudioState) -> AudioState:
             model="gpt-4o-mini-tts",
             voice="sage",
             input=text,
-            instructions="Speak in a cheerful and positive podcast tone.",
+            instructions=langfuse_client.get_prompt(PROMPT_NAME),
         ) as response:
             response.stream_to_file(audio_filename)
         # response = eleven_client.text_to_speech.convert(
