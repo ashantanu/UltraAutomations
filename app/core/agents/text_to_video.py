@@ -1,31 +1,41 @@
 import os
 import uuid
-import logging
 import time
 import shutil
-from typing import TypedDict
-from elevenlabs import VoiceSettings
+from typing import TypedDict, Dict, Any
 from elevenlabs.client import ElevenLabs
 from langgraph.graph import StateGraph, END
-from moviepy.editor import ImageClip, AudioFileClip
 from openai import OpenAI
 import base64
 from langfuse import Langfuse
 from langfuse.callback import CallbackHandler
+from pathlib import Path
+from app.utils.logging_utils import get_logger
+from app.utils.config import config
+from app.video import VideoProcessor, VideoInput, VideoConfig, AudioConfig
+
+# Global configuration for video processing
+DEFAULT_VIDEO_CONFIG = VideoConfig(
+    fps=24,
+    video_bitrate='1000k',
+    audio_bitrate='128k',
+    min_free_space_gb=1.0,
+    preset='ultrafast',
+    threads=2
+)
+
+DEFAULT_AUDIO_CONFIG = AudioConfig(
+    main_audio_volume=1.0,
+    background_music_volume=0.025
+)
+
+# Get background music path from config
+BACKGROUND_MUSIC_PATH = config.get('paths', 'background_music')
 
 # Ensure data directory exists
 os.makedirs("data", exist_ok=True)
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('pipeline.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Setup your API keys
 ELEVEN_LABS_API_KEY = os.getenv("ELEVEN_LABS_API_KEY")
@@ -66,6 +76,8 @@ class AudioState(TypedDict):
     youtube_video_id: str
 
 # --- Step 1: Turn text into audio ---
+
+
 def text_to_audio(state: AudioState) -> AudioState:
     start_time = time.time()
     logger.info("Starting text-to-audio conversion...")
@@ -101,13 +113,16 @@ def text_to_audio(state: AudioState) -> AudioState:
 
         state["audio_filepath"] = audio_filename
         duration = time.time() - start_time
-        logger.info(f"Text-to-audio conversion completed in {duration:.2f} seconds")
+        logger.info(
+            f"Text-to-audio conversion completed in {duration:.2f} seconds")
         return state
     except Exception as e:
         logger.error(f"Error in text_to_audio: {str(e)}", exc_info=True)
         raise
 
 # --- Step 2: Generate image using DALL-E ---
+
+
 def generate_image(state: AudioState) -> AudioState:
     start_time = time.time()
     if not state.get('image_filepath') is None:
@@ -130,7 +145,6 @@ def generate_image(state: AudioState) -> AudioState:
         logger.info("Downloading generated image...")
         image_data = base64.b64decode(img.data[0].b64_json)
 
-
         logger.info("Writing image file...")
         with open(image_filename, "wb") as f:
             f.write(image_data)
@@ -144,61 +158,51 @@ def generate_image(state: AudioState) -> AudioState:
         raise
 
 # --- Step 3: Create video from image and audio ---
-def create_video(state: AudioState) -> AudioState:
+
+
+def create_video(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Create a video from audio and image using the modular video processor.
+
+    Args:
+        state: Dictionary containing audio_filepath and image_filepath
+
+    Returns:
+        Updated state dictionary with video_filepath
+
+    Raises:
+        Various exceptions with detailed error context
+    """
     start_time = time.time()
     logger.info("Starting video creation...")
-    audio_path = state["audio_filepath"]
-    image_path = state["image_filepath"]
-    video_filename = f"data/{uuid.uuid4()}.mp4"
-    logger.info(f"Generating video filename: {video_filename}")
 
     try:
-        # Check if data directory exists and is writable
-        data_dir = os.path.dirname(video_filename)
-        if not os.path.exists(data_dir):
-            os.makedirs(data_dir, exist_ok=True)
-        if not os.access(data_dir, os.W_OK):
-            raise PermissionError(f"No write permission for directory: {data_dir}")
+        # Extract paths from state
+        audio_path = state["audio_filepath"]
+        image_path = state["image_filepath"]
+        video_filename = f"data/{uuid.uuid4()}.mp4"
+        logger.info(f"Generating video filename: {video_filename}")
 
-        # Check input files
-        if not os.path.exists(audio_path):
-            raise FileNotFoundError(f"Audio file not found: {audio_path}")
-        if not os.path.exists(image_path):
-            raise FileNotFoundError(f"Image file not found: {image_path}")
-
-        # Check available disk space (require at least 1GB free)
-        free_space = shutil.disk_usage(data_dir).free
-        if free_space < 1024 * 1024 * 1024:  # 1GB in bytes
-            raise OSError(f"Insufficient disk space. Only {free_space / (1024*1024*1024):.2f}GB available")
-
-        logger.info("Loading audio and image clips...")
-        audio_clip = AudioFileClip(audio_path)
-        image_clip = ImageClip(image_path).set_duration(audio_clip.duration)
-        image_clip = image_clip.set_audio(audio_clip)
-
-        logger.info("Writing video file...")
-        # Use more memory-efficient settings
-        image_clip.write_videofile(
-            video_filename,
-            fps=24,
-            codec='libx264',
-            audio_codec='aac',
-            preset='ultrafast',  # Faster encoding, less memory usage
-            threads=2,  # Limit thread usage
-            bitrate='1000k',  # Lower bitrate for smaller file size
-            audio_bitrate='128k',  # Lower audio bitrate
-            verbose=True,
-            logger=None,  # Disable MoviePy's logger to avoid duplicate messages
-            ffmpeg_params=[
-                '-max_muxing_queue_size', '1024',  # Increase queue size
-                '-thread_queue_size', '512',  # Increase thread queue
-                '-max_error_rate', '0.1',  # Allow some errors
-                '-err_detect', 'ignore_err',  # Ignore non-critical errors
-                '-max_interleave_delta', '0',  # Reduce interleaving
-                '-vsync', '0',  # Disable video sync
-                '-async', '1'  # Enable audio sync
-            ]
+        # Create video processor with default configurations
+        processor = VideoProcessor(
+            video_config=DEFAULT_VIDEO_CONFIG,
+            audio_config=DEFAULT_AUDIO_CONFIG
         )
+
+        # Prepare input data
+        input_data = VideoInput(
+            main_audio_path=Path(audio_path),
+            image_path=Path(image_path),
+            output_path=Path(video_filename),
+            background_music_path=Path(BACKGROUND_MUSIC_PATH) if os.path.exists(
+                BACKGROUND_MUSIC_PATH) else None
+        )
+
+        # Process the video
+        result = processor.create_video(input_data)
+
+        if not result.success:
+            raise RuntimeError(result.error)
 
         # Verify the output file was created and has content
         if not os.path.exists(video_filename):
@@ -206,10 +210,12 @@ def create_video(state: AudioState) -> AudioState:
         if os.path.getsize(video_filename) == 0:
             raise OSError("Video file was created but is empty")
 
+        # Update state with video path
         state["video_filepath"] = video_filename
         duration = time.time() - start_time
         logger.info(f"Video creation completed in {duration:.2f} seconds")
         return state
+
     except Exception as e:
         logger.error(f"Error in create_video: {str(e)}", exc_info=True)
         # Add additional context to the error
@@ -218,13 +224,17 @@ def create_video(state: AudioState) -> AudioState:
             "audio_path": audio_path,
             "image_path": image_path,
             "video_filename": video_filename,
-            "data_dir": data_dir,
-            "free_space_gb": shutil.disk_usage(data_dir).free / (1024*1024*1024) if 'data_dir' in locals() else None,
-            "audio_duration": audio_clip.duration if 'audio_clip' in locals() else None,
-            "image_size": os.path.getsize(image_path) if os.path.exists(image_path) else None
+            "data_dir": os.path.dirname(video_filename) if 'video_filename' in locals() else None,
+            "free_space_gb": shutil.disk_usage(os.path.dirname(video_filename)).free / (1024*1024*1024)
+            if 'video_filename' in locals() and os.path.exists(os.path.dirname(video_filename)) else None,
+            "background_music_path": BACKGROUND_MUSIC_PATH,
+            "background_music_exists": os.path.exists(BACKGROUND_MUSIC_PATH) if BACKGROUND_MUSIC_PATH else False,
+            "video_config": DEFAULT_VIDEO_CONFIG.dict(),
+            "audio_config": DEFAULT_AUDIO_CONFIG.dict()
         }
         logger.error(f"Error context: {error_context}")
         raise
+
 
 # --- Build LangGraph ---
 logger.info("Building LangGraph...")
@@ -252,8 +262,10 @@ if __name__ == "__main__":
 
     try:
         # Create a new trace for this run
-        result = app.invoke({"text": input_text}, config={"callbacks": [langfuse_handler]})
-        logger.info(f"Pipeline completed successfully. Video ID: {result.get('youtube_video_id', 'N/A')}")
+        result = app.invoke({"text": input_text}, config={
+                            "callbacks": [langfuse_handler]})
+        logger.info(
+            f"Pipeline completed successfully. Video ID: {result.get('youtube_video_id', 'N/A')}")
     except Exception as e:
         logger.error(f"Pipeline failed: {str(e)}", exc_info=True)
         raise

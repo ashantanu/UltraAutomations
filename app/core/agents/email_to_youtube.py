@@ -35,7 +35,6 @@ async def generate_summary_node(state: AgentState) -> AgentState:
             "title": summary_result.summary.title,
             "audio_script": summary_result.summary.audio_script,
             "description": summary_result.summary.description,
-            "citations": summary_result.summary.citations
         }
         return state
     except Exception as e:

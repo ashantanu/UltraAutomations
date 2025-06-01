@@ -23,3 +23,5 @@ google-api-python-client
 
 # tracing
 langfuse
+
+boto3>=1.34.0

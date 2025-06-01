@@ -7,7 +7,7 @@ from langfuse.callback import CallbackHandler
 from typing import Optional
 import os
 
-router = APIRouter()
+router = APIRouter(tags=["agent"])
 
 # Initialize Langfuse handler
 langfuse_handler = CallbackHandler(
@@ -71,7 +71,6 @@ async def news_summary():
                     "title": result.summary.title,
                     "audio_script": result.summary.audio_script,
                     "description": result.summary.description,
-                    "citations": result.summary.citations
                 }
             }
         }

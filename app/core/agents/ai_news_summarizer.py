@@ -1,6 +1,6 @@
 import os
 from datetime import datetime, timedelta
-from typing import List, Optional, TypedDict
+from typing import List, Optional, TypedDict, Union
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIModel
@@ -18,7 +18,9 @@ logger = get_logger(__name__)
 # Load environment variables
 load_dotenv()
 EMAIL_BODY_CHAR_LIMIT = 2000
+MODEL = 'anthropic:claude-sonnet-4-20250514'
 MODEL = 'openai:gpt-4.1'
+AUDIO_SCRIPT_DELIMITER = "==="
 
 # Initialize clients
 openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
@@ -30,7 +32,7 @@ langfuse_client = Langfuse(
 )
 
 # Constants
-SOURCES = ['news@alphasignal.ai']
+SOURCES = ['news@smol.ai']
 PROMPT_NAME = "news_summarizer"  # Name of the prompt in Langfuse
 
 class EmailContent(BaseModel):
@@ -41,12 +43,35 @@ class EmailContent(BaseModel):
     body: str
     source: str = Field(..., description="Source of the email (smol.ai or alphasignal.ai)")
 
+
+class AudioScriptModel(BaseModel):
+    """Model for the audio script."""
+    opening: str = Field(..., description="Opening statement")
+    news_items: List[str] = Field(..., description="List of news items")
+    closing: str = Field(..., description="Closing statement")
+
+
+def format_audio_script(script: AudioScriptModel) -> str:
+    """Format an AudioScriptModel into a structured string with delimiters.
+    
+    Args:
+        script: AudioScriptModel instance containing opening, news items, and closing
+        
+    Returns:
+        Formatted string with opening, news items list, and closing separated by delimiters
+    """
+    if not isinstance(script, AudioScriptModel):
+        raise TypeError("Input must be an AudioScriptModel instance")
+        
+    formatted_items = "\n".join(f"- {item}" for item in script.news_items)
+    
+    return f"{script.opening}\n{AUDIO_SCRIPT_DELIMITER}\n{formatted_items}\n{AUDIO_SCRIPT_DELIMITER}\n{script.closing}"
+
 class SummaryOutput(BaseModel):
     """Model for the OpenAI-generated summary."""
     title: str = Field(..., description="Title of the summary in format 'OFA Daily Summary [DATE]'")
-    audio_script: str = Field(..., description="15-minute podcast script summarizing the key points")
+    audio_script: Union[AudioScriptModel, str] = Field(..., description="5-minute podcast script summarizing the key points")
     description: str = Field(..., description="YouTube video description with citations")
-    citations: List[str] = Field(..., description="List of citations in format '[Source] - [Title]'")
 
 class FinalOutput(BaseModel):
     """Model for the final combined output."""
@@ -66,7 +91,7 @@ def fetch_emails_node(state: AgentState) -> AgentState:
     try:
         logger.info("Starting email fetch process")
         # Calculate date range (last 24 hours)
-        end_date = datetime.now()
+        end_date = datetime.now() - timedelta(days=1)
         
         # Format date for Gmail query
         date_query = f"after:{end_date.strftime('%Y/%m/%d')}"
@@ -148,8 +173,13 @@ async def generate_summary_node(state: AgentState) -> AgentState:
         
         logger.info("Successfully generated summary")
         logger.debug(f"Generated title: {result.output.title}")
-        logger.debug(f"Number of citations: {len(result.output.citations)}")
-        logger.debug(f"Audio script length: {len(result.output.audio_script)} characters")
+        
+        # Format the audio script if it's an AudioScriptModel
+        if isinstance(result.output.audio_script, AudioScriptModel):
+            logger.debug("Formatting audio script with delimiters")
+            result.output.audio_script = format_audio_script(result.output.audio_script)
+        
+        logger.debug(f"Audio script formatted: {result.output.audio_script[:100]}...")
         
         return_state["summary"] = result.output
         return return_state

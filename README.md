@@ -109,23 +109,36 @@ curl -X POST http://localhost:8000/auth/logout \
 ├── .env.example
 ├── app/
 │   ├── __init__.py
-│   ├── main.py
-│   ├── auth/
+│   ├── main.py              # FastAPI application entry point
+│   ├── auth/                # Authentication related code
 │   │   ├── __init__.py
 │   │   └── routes.py
-│   ├── middleware/
+│   ├── middleware/          # Middleware components
 │   │   ├── __init__.py
 │   │   └── auth.py
-│   ├── core/
-│   │   ├── agents/
+│   ├── core/               # Core application logic
+│   │   ├── startup.py      # Application startup operations
+│   │   ├── agents/         # AI agents
 │   │   │   ├── text_to_video.py
 │   │   │   └── text_to_youtube.py
 │   │   └── ...
-│   └── utils/
-│       ├── __init__.py
+│   ├── utils/             # Utility functions
+│   │   ├── __init__.py
+│   │   ├── s3.py          # S3 operations for asset management
+│   │   ├── youtube.py
+│   │   └── ...
+│   └── api/               # API routes
+│       ├── chat.py
+│       ├── agent.py
 │       ├── youtube.py
-│       └── ...
-├── test_youtube_upload.py
+│       └── sanity.py
+├── assets/                # Local assets directory
+│   ├── images/           # Image files (.jpg, .jpeg, .png, .gif)
+│   ├── audio/            # Audio files (.mp3, .wav)
+│   └── video/            # Video files (.mp4)
+├── scripts/              # Utility scripts
+│   ├── upload_assets.py  # Script to upload assets to S3
+│   └── ...
 └── requirements.txt
 ```
 
@@ -378,3 +391,81 @@ To update prompts:
 1. Modify the prompts in `scripts/upload_prompts.py`
 2. Run the upload script again
 3. The new version will be tracked in Langfuse
+
+## Asset Management
+
+The application uses AWS S3 for storing and managing assets (images, audio files, etc.). Assets are stored under the `app-assets` prefix in the configured S3 bucket.
+
+### Asset Directory Structure
+
+Assets are organized in the following structure:
+- `assets/` - Root directory for all local assets
+  - `images/` - Image files (.jpg, .jpeg, .png, .gif)
+  - `audio/` - Audio files (.mp3, .wav)
+  - `video/` - Video files (.mp4)
+
+### Prerequisites
+
+1. AWS credentials configured in your environment:
+   ```bash
+   # Add to your .env file
+   AWS_ACCESS_KEY_ID="your-access-key"
+   AWS_SECRET_ACCESS_KEY="your-secret-key"
+   AWS_REGION="your-region"  # Optional, defaults to us-east-1
+   S3_BUCKET_NAME="your-bucket-name"
+   ```
+
+2. Required Python packages (already in requirements.txt):
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+### Managing Assets
+
+#### Uploading Assets
+
+To upload assets to S3, use the provided script:
+```bash
+python scripts/upload_assets.py
+```
+
+The script will:
+1. Load environment variables from `.env`
+2. Check for required AWS credentials
+3. Upload all supported files from the `assets/` directory
+4. Skip unsupported file types
+5. Log the upload progress
+
+#### Downloading Assets
+
+Assets are automatically downloaded during application startup. The process:
+1. Checks for required environment variables
+2. Creates the `assets/` directory if it doesn't exist
+3. Downloads all supported files from S3
+4. Maintains the same directory structure locally
+
+### Supported File Types
+
+The following file types are supported:
+- Images: .jpg, .jpeg, .png, .gif
+- Audio: .mp3, .wav
+- Video: .mp4
+
+### Implementation Details
+
+- S3 operations are implemented in `app/utils/s3.py`
+- Startup operations (including asset download) are in `app/core/startup.py`
+- Asset upload script is in `scripts/upload_assets.py`
+- Assets are stored in S3 under the `app-assets/` prefix
+- Local assets are stored in the `assets/` directory
+
+### Environment Variables
+
+Add these to your `.env` file for asset management:
+```bash
+# AWS S3 Configuration
+AWS_ACCESS_KEY_ID="your-access-key"
+AWS_SECRET_ACCESS_KEY="your-secret-key"
+AWS_REGION="your-region"  # Optional, defaults to us-east-1
+S3_BUCKET_NAME="your-bucket-name"
+```
