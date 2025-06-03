@@ -16,6 +16,8 @@ moviepy==1.0.3
 bs4
 pillow # for images
 requests # for downloading fonts
+boto3>=1.34.0
+pydub>=0.25.1
 
 # google
 google-auth-oauthlib
@@ -23,5 +25,5 @@ google-api-python-client
 
 # tracing
 langfuse
+logfire
 
-boto3>=1.34.0

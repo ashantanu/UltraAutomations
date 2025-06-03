@@ -19,6 +19,7 @@ Additonal instructions:
 - no need to cover everything, only the most important, attention worthy topics
 - think about what would be most relevant to a listener trying to keep up with latest in AI and focus on those items only
 - Make sure headline worthy news items are covered, these are typically at the beginning of the newsletter
+- items should be written in a way someone can read directly
 
 Structure it like below:
 - opening
@@ -37,7 +38,3 @@ Output instructions:
 - write as one would speak it
 - opening with "Welcome to AI News Today, where we cut straight to what matters for AI professionals and founders. Here are today’s high-impact headlines:"
 - at the end of closing statement, conclude with thanking the user for listening, "For more specific details, check out the link in description to the latest AINews summary by smol.ai", asking to like share subscribe and bidding goodbye.
-
-
-Email:
-{email_content}

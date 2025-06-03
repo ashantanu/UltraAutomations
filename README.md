@@ -31,6 +31,9 @@ This is a FastAPI server with Supabase JWT authentication middleware and YouTube
    LANGFUSE_PUBLIC_KEY=your_langfuse_public_key
    LANGFUSE_SECRET_KEY=your_langfuse_secret_key
    LANGFUSE_HOST=https://cloud.langfuse.com  # Optional, defaults to this value
+
+   # Logfire
+   LOGFIRE_TOKEN=your_logfire_token  # Required for logging and monitoring
    ```
 
 5. Get Gmail OAuth credentials:

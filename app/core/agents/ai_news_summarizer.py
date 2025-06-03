@@ -2,8 +2,6 @@ import os
 from datetime import datetime, timedelta
 from typing import List, Optional, TypedDict, Union
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIModel
 from openai import OpenAI
 from app.utils.gmail_oauth import get_emails_from_gmail
 from app.utils.logging_utils import get_logger
@@ -11,6 +9,10 @@ from dotenv import load_dotenv
 from langgraph.graph import Graph, StateGraph, END
 from langfuse.callback import CallbackHandler
 from langfuse import Langfuse
+from pydantic_ai import Agent
+import logfire
+logfire.configure()
+
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -18,9 +20,10 @@ logger = get_logger(__name__)
 # Load environment variables
 load_dotenv()
 EMAIL_BODY_CHAR_LIMIT = 2000
-MODEL = 'anthropic:claude-sonnet-4-20250514'
 MODEL = 'openai:gpt-4.1'
+MODEL_PROVIDER = "openai"
 AUDIO_SCRIPT_DELIMITER = "==="
+AUDIO_SCRIPT_ITEM_DELIMITER = "<item>"
 
 # Initialize clients
 openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
@@ -35,13 +38,15 @@ langfuse_client = Langfuse(
 SOURCES = ['news@smol.ai']
 PROMPT_NAME = "news_summarizer"  # Name of the prompt in Langfuse
 
+
 class EmailContent(BaseModel):
     """Model for structured email content."""
     sender: str
     subject: str
     date: datetime
     body: str
-    source: str = Field(..., description="Source of the email (smol.ai or alphasignal.ai)")
+    source: str = Field(...,
+                        description="Source of the email (smol.ai or alphasignal.ai)")
 
 
 class AudioScriptModel(BaseModel):
@@ -51,33 +56,40 @@ class AudioScriptModel(BaseModel):
     closing: str = Field(..., description="Closing statement")
 
 
+class SummaryOutput(BaseModel):
+    """Model for the OpenAI-generated summary."""
+    title: str = Field(...,
+                       description="Title of the summary in format 'OFA Daily Summary [DATE]'")
+    audio_script: Union[AudioScriptModel, str] = Field(
+        ..., description="5-minute podcast script summarizing the key points")
+    description: str = Field(...,
+                             description="YouTube video description with citations")
+
+
 def format_audio_script(script: AudioScriptModel) -> str:
     """Format an AudioScriptModel into a structured string with delimiters.
-    
+
     Args:
         script: AudioScriptModel instance containing opening, news items, and closing
-        
+
     Returns:
         Formatted string with opening, news items list, and closing separated by delimiters
     """
     if not isinstance(script, AudioScriptModel):
         raise TypeError("Input must be an AudioScriptModel instance")
-        
-    formatted_items = "\n".join(f"- {item}" for item in script.news_items)
-    
+
+    formatted_items = "\n".join(
+        f"{AUDIO_SCRIPT_ITEM_DELIMITER} {item}" for item in script.news_items)
+
     return f"{script.opening}\n{AUDIO_SCRIPT_DELIMITER}\n{formatted_items}\n{AUDIO_SCRIPT_DELIMITER}\n{script.closing}"
 
-class SummaryOutput(BaseModel):
-    """Model for the OpenAI-generated summary."""
-    title: str = Field(..., description="Title of the summary in format 'OFA Daily Summary [DATE]'")
-    audio_script: Union[AudioScriptModel, str] = Field(..., description="5-minute podcast script summarizing the key points")
-    description: str = Field(..., description="YouTube video description with citations")
 
 class FinalOutput(BaseModel):
     """Model for the final combined output."""
     date: datetime
     emails_processed: int
     summary: SummaryOutput
+
 
 class AgentState(TypedDict):
     """State for the LangGraph agent."""
@@ -86,17 +98,18 @@ class AgentState(TypedDict):
     error: Optional[str]
     trace_id: str
 
+
 def fetch_emails_node(state: AgentState) -> AgentState:
     """Node for fetching emails."""
     try:
         logger.info("Starting email fetch process")
         # Calculate date range (last 24 hours)
-        end_date = datetime.now() - timedelta(days=1)
-        
+        end_date = datetime.now() - timedelta(days=2)
+
         # Format date for Gmail query
         date_query = f"after:{end_date.strftime('%Y/%m/%d')}"
         logger.debug(f"Date query: {date_query}")
-        
+
         all_emails = []
         for source in SOURCES:
             logger.info(f"Fetching emails from source: {source}")
@@ -105,13 +118,14 @@ def fetch_emails_node(state: AgentState) -> AgentState:
                 query=f'from:{source} {date_query}',
                 max_results=10
             )
-            
+
             # Convert to EmailContent model
             for email in emails:
                 all_emails.append(EmailContent(
                     sender=email['sender'],
                     subject=email['subject'],
-                    date=datetime.strptime(email['date'], '%a, %d %b %Y %H:%M:%S %z'),
+                    date=datetime.strptime(
+                        email['date'], '%a, %d %b %Y %H:%M:%S %z'),
                     body=email['body'],
                     source=source
                 ))
@@ -130,6 +144,7 @@ def fetch_emails_node(state: AgentState) -> AgentState:
         state["error"] = str(e)
         return state
 
+
 async def generate_summary_node(state: AgentState) -> AgentState:
     """Node for generating summary."""
     return_state = {}
@@ -143,7 +158,8 @@ async def generate_summary_node(state: AgentState) -> AgentState:
             f"Content: {email.body[:EMAIL_BODY_CHAR_LIMIT] + ('...' if len(email.body) > EMAIL_BODY_CHAR_LIMIT else '')}"
             for email in state["emails"]
         ])
-        logger.debug(f"Prepared email content with {len(state['emails'])} emails")
+        logger.debug(
+            f"Prepared email content with {len(state['emails'])} emails")
         logger.debug(f"Email content length: {len(email_content)} characters")
 
         if not email_content:
@@ -156,38 +172,42 @@ async def generate_summary_node(state: AgentState) -> AgentState:
         if not prompt_obj:
             logger.error(f"Prompt '{PROMPT_NAME}' not found in Langfuse")
             raise ValueError(f"Prompt '{PROMPT_NAME}' not found in Langfuse")
-        
+
         logger.info(f"Retrieved prompt from Langfuse: {PROMPT_NAME}")
-        
+
         # Format the prompt with the email content
-        formatted_prompt = prompt_obj.prompt.format(email_content=email_content)
-        logger.debug(f"Formatted prompt length: {len(formatted_prompt)} characters")
+        formatted_prompt = prompt_obj.prompt
+        logger.debug(
+            f"Formatted prompt length: {len(formatted_prompt)} characters")
 
         # Use Pydantic AI to get structured output
         logger.info("Generating summary using Pydantic AI")
-        agent = Agent(MODEL, output_type=SummaryOutput)
         logger.debug(f"Initialized Pydantic AI agent with model: {MODEL}")
-        
-        result = await agent.run(formatted_prompt)
-        logger.debug(f"Pydantic AI usage: {result.usage()}")
-        
+        agent = Agent(MODEL, output_type=SummaryOutput, instructions=formatted_prompt, instrument=True)
+        result = await agent.run(f"\n\nemail_content: {email_content}\n\nGenerate the script as per the instructions.")
+        result = result.output
+
         logger.info("Successfully generated summary")
-        logger.debug(f"Generated title: {result.output.title}")
-        
+        logger.debug(f"Generated title: {result.title}")
+
         # Format the audio script if it's an AudioScriptModel
-        if isinstance(result.output.audio_script, AudioScriptModel):
+        if isinstance(result.audio_script, AudioScriptModel):
             logger.debug("Formatting audio script with delimiters")
-            result.output.audio_script = format_audio_script(result.output.audio_script)
-        
-        logger.debug(f"Audio script formatted: {result.output.audio_script[:100]}...")
-        
-        return_state["summary"] = result.output
+            result.audio_script = format_audio_script(
+                result.audio_script)
+
+        logger.debug(
+            f"Audio script formatted: {result.audio_script[:100]}...")
+
+        return_state["summary"] = result
         return return_state
 
     except Exception as e:
-        logger.error(f"Error in generate_summary_node: {str(e)}", exc_info=True)
+        logger.error(
+            f"Error in generate_summary_node: {str(e)}", exc_info=True)
         return_state["error"] = str(e)
         return return_state
+
 
 def build_graph() -> Graph:
     """Build the LangGraph workflow."""
@@ -210,13 +230,15 @@ def build_graph() -> Graph:
     logger.info("Compiling workflow graph")
     return workflow.compile()
 
+
 # Initialize the graph
 graph = build_graph()
+
 
 async def generate_ai_news_summary() -> FinalOutput:
     """
     Generate the daily AI news summary.
-    
+
     Returns:
         FinalOutput containing the summary and metadata
     """
@@ -239,9 +261,9 @@ async def generate_ai_news_summary() -> FinalOutput:
             host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
         )
         logger.debug("Initialized Langfuse handler")
-        
+
         final_state = await graph.ainvoke(
-            state, 
+            state,
             config={
                 "callbacks": [langfuse_handler],
                 "run_name": "ai_news_summary"
@@ -259,11 +281,14 @@ async def generate_ai_news_summary() -> FinalOutput:
             emails_processed=len(final_state["emails"]),
             summary=final_state["summary"]
         )
-        logger.debug(f"Created final output with {output.emails_processed} emails processed")
+        logger.debug(
+            f"Created final output with {output.emails_processed} emails processed")
 
-        logger.info(f"Successfully generated summary with {output.emails_processed} emails processed")
+        logger.info(
+            f"Successfully generated summary with {output.emails_processed} emails processed")
         return output
 
     except Exception as e:
-        logger.error(f"Failed to generate daily summary: {str(e)}", exc_info=True)
-        raise Exception(f"Failed to generate daily summary: {str(e)}") 
+        logger.error(
+            f"Failed to generate daily summary: {str(e)}", exc_info=True)
+        raise Exception(f"Failed to generate daily summary: {str(e)}")

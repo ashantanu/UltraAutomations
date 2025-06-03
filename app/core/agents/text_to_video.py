@@ -2,7 +2,7 @@ import os
 import uuid
 import time
 import shutil
-from typing import TypedDict, Dict, Any
+from typing import TypedDict, Dict, Any, List, Tuple
 from elevenlabs.client import ElevenLabs
 from langgraph.graph import StateGraph, END
 from openai import OpenAI
@@ -10,9 +10,12 @@ import base64
 from langfuse import Langfuse
 from langfuse.callback import CallbackHandler
 from pathlib import Path
+import tempfile
+from pydub import AudioSegment
 from app.utils.logging_utils import get_logger
 from app.utils.config import config
 from app.video import VideoProcessor, VideoInput, VideoConfig, AudioConfig
+from app.core.agents.ai_news_summarizer import AUDIO_SCRIPT_ITEM_DELIMITER, AUDIO_SCRIPT_DELIMITER
 
 # Global configuration for video processing
 DEFAULT_VIDEO_CONFIG = VideoConfig(
@@ -77,44 +80,98 @@ class AudioState(TypedDict):
 
 # --- Step 1: Turn text into audio ---
 
+def generate_segmented_audio(
+    text: str, 
+    section_pause_duration_ms: int = 1000,
+    item_pause_duration_ms: int = 500
+) -> str:
+    """
+    Generate audio from a segmented script with pauses between sections and items.
+    
+    Args:
+        text: The script text to convert to audio
+        section_pause_duration_ms: Duration of pause between major sections (opening/items/closing) in milliseconds
+        item_pause_duration_ms: Duration of pause between individual items in milliseconds
+        
+    Returns:
+        str: Path to the generated audio file
+    """
+    logger.info("Starting segmented audio generation...")
+    start_time = time.time()
+    
+    # Split the script into segments
+    segments = text.split(AUDIO_SCRIPT_DELIMITER)
+    if len(segments) != 3:
+        raise ValueError("Script must contain exactly two '===' separators")
+    
+    opening, items, closing = segments
+    
+    # Process items into a list
+    items = [item.strip() for item in items.split(AUDIO_SCRIPT_ITEM_DELIMITER) if item.strip()]
+    
+    # Create a temporary directory for intermediate files
+    with tempfile.TemporaryDirectory() as temp_dir:
+        audio_segments: List[AudioSegment] = []
+        
+        # Generate audio for opening
+        opening_audio = _generate_single_segment(opening.strip(), temp_dir, "opening")
+        audio_segments.append(opening_audio)
+        
+        # Add section pause after opening
+        audio_segments.append(AudioSegment.silent(duration=section_pause_duration_ms))
+        
+        # Generate audio for each item
+        for i, item in enumerate(items):
+            item_audio = _generate_single_segment(item, temp_dir, f"item_{i}")
+            audio_segments.append(item_audio)
+            # Add item pause after each item except the last one
+            if i < len(items) - 1:
+                audio_segments.append(AudioSegment.silent(duration=item_pause_duration_ms))
+        
+        # Add section pause before closing
+        audio_segments.append(AudioSegment.silent(duration=section_pause_duration_ms))
+        
+        # Generate audio for closing
+        closing_audio = _generate_single_segment(closing.strip(), temp_dir, "closing")
+        audio_segments.append(closing_audio)
+        
+        # Combine all segments
+        final_audio = sum(audio_segments)
+        
+        # Save the final audio
+        output_filename = f"data/{uuid.uuid4()}.mp3"
+        final_audio.export(output_filename, format="mp3")
+        
+        duration = time.time() - start_time
+        logger.info(f"Segmented audio generation completed in {duration:.2f} seconds")
+        return output_filename
+
+def _generate_single_segment(text: str, temp_dir: str, segment_name: str) -> AudioSegment:
+    """Helper function to generate audio for a single text segment."""
+    temp_audio_path = os.path.join(temp_dir, f"{segment_name}.mp3")
+    
+    with client.audio.speech.with_streaming_response.create(
+        model="gpt-4o-mini-tts",
+        voice="sage",
+        input=text,
+        instructions=langfuse_client.get_prompt(PROMPT_NAME).prompt,
+    ) as response:
+        response.stream_to_file(temp_audio_path)
+    
+    return AudioSegment.from_mp3(temp_audio_path)
 
 def text_to_audio(state: AudioState) -> AudioState:
     start_time = time.time()
     logger.info("Starting text-to-audio conversion...")
     text = state["text"]
-    audio_filename = f"data/{uuid.uuid4()}.mp3"
-    logger.info(f"Generated audio filename: {audio_filename}")
-
+    
     try:
-        logger.info("Calling ElevenLabs API...")
-        with client.audio.speech.with_streaming_response.create(
-            model="gpt-4o-mini-tts",
-            voice="sage",
-            input=text,
-            instructions=langfuse_client.get_prompt(PROMPT_NAME),
-        ) as response:
-            response.stream_to_file(audio_filename)
-        # response = eleven_client.text_to_speech.convert(
-        #     text=text,
-        #     voice_id=VOICE_ID,
-        #     model_id="eleven_flash_v2_5",
-        #     output_format="mp3_44100_128",
-        #     voice_settings=VoiceSettings(
-        #         stability=0.5,
-        #         similarity_boost=0.5
-        #     ),
-        # )
-
-        # logger.info("Writing audio file...")
-        # with open(audio_filename, "wb") as f:
-        #     for chunk in response:
-        #         if chunk:
-        #             f.write(chunk)
-
+        # Use the new segmented audio generation function
+        audio_filename = generate_segmented_audio(text)
         state["audio_filepath"] = audio_filename
+        
         duration = time.time() - start_time
-        logger.info(
-            f"Text-to-audio conversion completed in {duration:.2f} seconds")
+        logger.info(f"Text-to-audio conversion completed in {duration:.2f} seconds")
         return state
     except Exception as e:
         logger.error(f"Error in text_to_audio: {str(e)}", exc_info=True)
