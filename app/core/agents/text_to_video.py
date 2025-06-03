@@ -260,7 +260,7 @@ def create_video(state: Dict[str, Any]) -> Dict[str, Any]:
         # Prepare input data
         logger.info(f"Background music file path: {BACKGROUND_MUSIC_PATH}")
         logger.info(
-            f"Background music file exists: {BACKGROUND_MUSIC_PATH.exists()}")
+            f"Background music file exists: {os.path.exists(BACKGROUND_MUSIC_PATH)}")
 
         input_data = VideoInput(
             main_audio_path=Path(audio_path),
