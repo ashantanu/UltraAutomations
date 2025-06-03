@@ -104,7 +104,7 @@ def fetch_emails_node(state: AgentState) -> AgentState:
     try:
         logger.info("Starting email fetch process")
         # Calculate date range (last 24 hours)
-        end_date = datetime.now() - timedelta(days=2)
+        end_date = datetime.now()
 
         # Format date for Gmail query
         date_query = f"after:{end_date.strftime('%Y/%m/%d')}"

@@ -2,8 +2,10 @@ from fastapi import Request, HTTPException, status
 from fastapi.security import HTTPBearer
 from supabase import create_client, Client
 import os
-from typing import Callable
 import json
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Initialize Supabase client
 supabase: Client = create_client(
