@@ -22,7 +22,7 @@ class YouTubeUploadRequest(BaseModel):
     description: str
     thumbnail_path: Optional[str] = None
 
-@router.post("/youtube-upload")
+@router.post("/text-to-youtube")
 async def youtube_upload(request: YouTubeUploadRequest):
     """
     Endpoint to convert text to video and upload to YouTube.

@@ -54,20 +54,32 @@ class VideoProcessor:
 
             # Handle background music if provided
             if input_data.background_music_path:
-                background_music = AudioFileClip(str(input_data.background_music_path))
-                
-                # Loop background music if needed
-                if background_music.duration < main_audio.duration:
-                    n_loops = int(main_audio.duration / background_music.duration) + 1
-                    background_music_clips = [background_music] * n_loops
-                    background_music = CompositeAudioClip(background_music_clips)
-                    background_music = background_music.subclip(0, main_audio.duration)
+                logger.info(f"Loading background music from: {input_data.background_music_path}")
+                try:
+                    background_music = AudioFileClip(str(input_data.background_music_path))
+                    logger.info(f"Background music loaded successfully. Duration: {background_music.duration:.2f}s")
+                    
+                    # Loop background music if needed
+                    if background_music.duration < main_audio.duration:
+                        n_loops = int(main_audio.duration / background_music.duration) + 1
+                        logger.info(f"Background music duration ({background_music.duration:.2f}s) is shorter than main audio ({main_audio.duration:.2f}s). Looping {n_loops} times.")
+                        background_music_clips = [background_music] * n_loops
+                        background_music = CompositeAudioClip(background_music_clips)
+                        background_music = background_music.subclip(0, main_audio.duration)
+                        logger.info(f"Background music looped to match main audio duration: {background_music.duration:.2f}s")
 
-                # Adjust volumes and create composite audio
-                main_audio = main_audio.volumex(self.audio_config.main_audio_volume)
-                background_music = background_music.volumex(self.audio_config.background_music_volume)
-                final_audio = CompositeAudioClip([main_audio, background_music])
+                    # Adjust volumes and create composite audio
+                    logger.info(f"Adjusting audio volumes - Main: {self.audio_config.main_audio_volume}x, Background: {self.audio_config.background_music_volume}x")
+                    main_audio = main_audio.volumex(self.audio_config.main_audio_volume)
+                    background_music = background_music.volumex(self.audio_config.background_music_volume)
+                    final_audio = CompositeAudioClip([main_audio, background_music])
+                    logger.info("Composite audio created successfully with background music")
+                except Exception as e:
+                    logger.error(f"Error processing background music: {str(e)}", exc_info=True)
+                    logger.warning("Falling back to main audio only")
+                    final_audio = main_audio.volumex(self.audio_config.main_audio_volume)
             else:
+                logger.info("No background music provided, using main audio only")
                 final_audio = main_audio.volumex(self.audio_config.main_audio_volume)
 
             # Set audio to image clip

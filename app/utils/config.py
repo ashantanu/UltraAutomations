@@ -52,6 +52,12 @@ class Config:
     def output_dir(self) -> str:
         """Get the output directory from config"""
         return self._config.get("paths", "output_dir")
+
+    @property
+    def background_music_path(self) -> Path:
+        """Get the background music path from config"""
+        return self._config.get("paths", "background_music")
+    
     
     # Thumbnail text settings
     @property
