@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Optional, TypedDict, Union
 from pydantic import BaseModel, Field
 from openai import OpenAI
@@ -11,6 +11,7 @@ from langfuse.callback import CallbackHandler
 from langfuse import Langfuse
 from pydantic_ai import Agent
 import logfire
+import pytz
 logfire.configure()
 
 
@@ -104,7 +105,7 @@ def fetch_emails_node(state: AgentState) -> AgentState:
     try:
         logger.info("Starting email fetch process")
         # Calculate date range (last 24 hours)
-        end_date = datetime.now()
+        end_date = datetime.now(pytz.timezone('US/Pacific'))
 
         # Format date for Gmail query
         date_query = f"after:{end_date.strftime('%Y/%m/%d')}"
