@@ -112,7 +112,7 @@ def fetch_emails_node(state: AgentState) -> AgentState:
 
         all_emails = []
         for source in SOURCES:
-            logger.info(f"Fetching emails from source: {source}")
+            logger.info(f"Fetching emails from source: {source} with query: {f'from:{source} {date_query}'}")
             # Get emails from each source
             emails = get_emails_from_gmail(
                 query=f'from:{source} {date_query}',

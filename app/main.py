@@ -23,6 +23,7 @@ async def lifespan(app: FastAPI):
     """
     Lifespan context manager for FastAPI startup and shutdown events.
     """
+    logger.info("Entering lifespan context manager.")
     # Startup
     logger.info("Starting up application...")
     
@@ -34,6 +35,7 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown
     logger.info("Shutting down application...")
+    logger.info("Exiting lifespan context manager.")
 
 app = FastAPI(
     title="Your API",
