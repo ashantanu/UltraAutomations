@@ -4,6 +4,7 @@ import os
 import requests
 import tempfile
 from pathlib import Path
+import pytz
 from app.utils.logging_utils import get_logger
 
 # Set up logging
@@ -173,7 +174,7 @@ def add_text_overlay(image_path, output_path=None):
     draw.text((title_x, title_y), title, font=title_font, fill="white")
     
     # Add date with shadow
-    today = datetime.now().strftime("%b - %d - %y")
+    today = datetime.now(pytz.timezone('US/Pacific')).strftime("%b - %d - %y")
     date_bbox = draw.textbbox((0, 0), today, font=date_font)
     date_width = date_bbox[2] - date_bbox[0]
     
