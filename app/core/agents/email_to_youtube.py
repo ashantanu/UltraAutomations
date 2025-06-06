@@ -21,12 +21,13 @@ class AgentState(TypedDict):
     error: Optional[str]
     playlist_name: Optional[str]
     create_playlist_if_not_exists: bool = False
+    target_date: Optional[datetime]
 
 async def generate_summary_node(state: AgentState) -> AgentState:
     """Node for generating news summary."""
     try:
         logger.info("Generating news summary...")
-        summary_result = await generate_ai_news_summary()
+        summary_result = await generate_ai_news_summary(date=state.get("target_date"))
         
         if not summary_result:
             raise Exception("Failed to generate news summary")
@@ -120,16 +121,22 @@ def build_graph() -> StateGraph:
 graph = build_graph()
 
 @observe(name="email_to_youtube_flow")
-async def email_to_youtube():
+async def email_to_youtube(date: Optional[datetime] = None):
     """
     Orchestrates the flow from email reading to YouTube video creation.
     Combines AI news summarizer with text-to-youtube functionality.
+    
+    Args:
+        date (Optional[datetime]): The date to process emails for. If not provided,
+            defaults to today's PST date.
     
     Returns:
         dict: A dictionary containing the result of the operation
     """
     start_time = datetime.now()
     logger.info("🎬 STARTING EMAIL-TO-YOUTUBE FLOW 🎬")
+    if date:
+        logger.info(f"Processing emails for date: {date.isoformat()}")
     
     try:
         # Initialize state
@@ -139,7 +146,8 @@ async def email_to_youtube():
             "thumbnail_path": None,
             "error": None,
             "playlist_name": config.youtube_playlist_name,
-            "create_playlist_if_not_exists": config.create_playlist_if_not_exists
+            "create_playlist_if_not_exists": config.create_playlist_if_not_exists,
+            "target_date": date
         }
         langfuse_handler = CallbackHandler(
             secret_key=os.getenv("LANGFUSE_SECRET_KEY"),

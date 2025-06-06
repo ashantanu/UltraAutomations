@@ -1,11 +1,13 @@
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.core.agents.text_to_youtube import text_to_youtube
 from app.core.agents.ai_news_summarizer import generate_ai_news_summary
 from app.core.agents.email_to_youtube import email_to_youtube
 from langfuse.callback import CallbackHandler
 from typing import Optional
 import os
+from datetime import datetime
+from app.utils.date_utils import get_pst_date
 
 router = APIRouter(tags=["agent"])
 
@@ -21,6 +23,12 @@ class YouTubeUploadRequest(BaseModel):
     title: str
     description: str
     thumbnail_path: Optional[str] = None
+
+class EmailToYouTubeRequest(BaseModel):
+    date: Optional[datetime] = Field(
+        default=get_pst_date(),
+        description="The date to process emails for. Defaults to today's PST date."
+    )
 
 @router.post("/text-to-youtube")
 async def youtube_upload(request: YouTubeUploadRequest):
@@ -81,15 +89,19 @@ async def news_summary():
         }
 
 @router.post("/email-to-youtube")
-async def email_to_youtube_endpoint():
+async def email_to_youtube_endpoint(request: EmailToYouTubeRequest = None):
     """
     Endpoint to generate a YouTube video from email summaries.
+    
+    Args:
+        request (EmailToYouTubeRequest, optional): The request containing the date to process.
+            If not provided, defaults to the last 24 hours.
     
     Returns:
         dict: A dictionary containing the summary and video details
     """
     try:
-        result = await email_to_youtube()
+        result = await email_to_youtube(date=request.date if request else None)
         return {
             "status": "success",
             "message": "Email-to-YouTube flow completed successfully",

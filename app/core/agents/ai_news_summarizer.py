@@ -11,7 +11,7 @@ from langfuse.callback import CallbackHandler
 from langfuse import Langfuse
 from pydantic_ai import Agent
 import logfire
-import pytz
+from app.utils.date_utils import get_pst_date
 logfire.configure()
 
 
@@ -98,15 +98,16 @@ class AgentState(TypedDict):
     summary: Optional[SummaryOutput]
     error: Optional[str]
     trace_id: str
+    target_date: Optional[datetime]
 
 
 def fetch_emails_node(state: AgentState) -> AgentState:
     """Node for fetching emails."""
     try:
         logger.info("Starting email fetch process")
-        # Calculate date range (last 24 hours)
-        end_date = datetime.now(pytz.timezone('US/Pacific'))
-
+        # Calculate date range based on provided date or last 24 hours
+        end_date = state.get("target_date", get_pst_date())
+        
         # Format date for Gmail query
         date_query = f"after:{end_date.strftime('%Y/%m/%d')}"
         logger.debug(f"Date query: {date_query}")
@@ -133,8 +134,8 @@ def fetch_emails_node(state: AgentState) -> AgentState:
             logger.info(f"Found {len(emails)} emails from {source}")
 
         if not all_emails:
-            logger.warning("No emails found in the last 24 hours")
-            raise ValueError("No emails found in the last 24 hours")
+            logger.warning(f"No emails found for date: {end_date.strftime('%Y/%m/%d')}")
+            raise ValueError(f"No emails found for date: {end_date.strftime('%Y/%m/%d')}")
 
         logger.info(f"Total emails fetched: {len(all_emails)}")
         state["emails"] = all_emails
@@ -236,23 +237,30 @@ def build_graph() -> Graph:
 graph = build_graph()
 
 
-async def generate_ai_news_summary() -> FinalOutput:
+async def generate_ai_news_summary(date: Optional[datetime] = None) -> FinalOutput:
     """
     Generate the daily AI news summary.
+
+    Args:
+        date (Optional[datetime]): The date to process emails for. If not provided,
+            defaults to the last 24 hours.
 
     Returns:
         FinalOutput containing the summary and metadata
     """
     logger.info("Starting AI news summary generation")
     try:
-        # Initialize state
+        # Initialize state with optional date
         state: AgentState = {
             "emails": [],
             "summary": None,
             "error": None,
-            "trace_id": None
+            "trace_id": None,
+            "target_date": date
         }
         logger.debug("Initialized agent state")
+        if date:
+            logger.info(f"Processing emails for date: {date.isoformat()}")
 
         # Run the graph
         logger.info("Invoking workflow graph")
@@ -278,7 +286,7 @@ async def generate_ai_news_summary() -> FinalOutput:
 
         # Create final output
         output = FinalOutput(
-            date=datetime.now(),
+            date=date or get_pst_date(),
             emails_processed=len(final_state["emails"]),
             summary=final_state["summary"]
         )
