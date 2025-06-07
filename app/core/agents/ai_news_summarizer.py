@@ -7,7 +7,7 @@ from app.utils.gmail_oauth import get_emails_from_gmail
 from app.utils.logging_utils import get_logger
 from dotenv import load_dotenv
 from langgraph.graph import Graph, StateGraph, END
-from langfuse.callback import CallbackHandler
+from langfuse.langchain import CallbackHandler
 from langfuse import Langfuse
 from pydantic_ai import Agent
 import logfire

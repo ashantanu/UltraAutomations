@@ -8,7 +8,7 @@ from langgraph.graph import StateGraph, END
 from openai import OpenAI
 import base64
 from langfuse import Langfuse
-from langfuse.callback import CallbackHandler
+from langfuse.langchain import CallbackHandler
 from pathlib import Path
 import tempfile
 from pydub import AudioSegment

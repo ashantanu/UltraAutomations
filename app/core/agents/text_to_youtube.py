@@ -1,8 +1,7 @@
-import os
 import logging
 from datetime import datetime
 from app.utils.youtube import upload_video_to_youtube
-from langfuse.decorators import observe
+from langfuse import observe
 from app.core.agents.text_to_video import app as text_to_video_app
 from typing import Optional
 

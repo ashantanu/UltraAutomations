@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 from app.core.agents.text_to_youtube import text_to_youtube
 from app.core.agents.ai_news_summarizer import generate_ai_news_summary
 from app.core.agents.email_to_youtube import email_to_youtube
-from langfuse.callback import CallbackHandler
+from langfuse.langchain import CallbackHandler
 from typing import Optional
 import os
 from datetime import datetime

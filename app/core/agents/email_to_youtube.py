@@ -2,13 +2,13 @@ import os
 from datetime import datetime
 from typing import TypedDict, Optional
 from langgraph.graph import StateGraph, END
-from langfuse.decorators import observe
+from langfuse import observe
 from app.core.agents.ai_news_summarizer import generate_ai_news_summary
 from app.core.agents.text_to_youtube import text_to_youtube
 from app.utils.logging_utils import get_logger
 from app.utils.image_utils import add_text_overlay
 from app.utils.config import config
-from langfuse.callback import CallbackHandler
+from langfuse.langchain import CallbackHandler
 
 # Initialize logger
 logger = get_logger(__name__)
