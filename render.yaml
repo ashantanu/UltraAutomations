@@ -9,3 +9,18 @@ services:
     envVars:
       - key: OPENAI_API_KEY
         sync: false
+
+  # Cron job to run the upload_video.py script
+  - type: cron
+    name: youtube-uploader-cron
+    env: python
+    buildCommand: pip install -r requirements.txt # Assuming requirements.txt contains necessary dependencies
+    startCommand: python jobs/create_summary_job.py
+    schedule: "30 23 * * *" # Run daily at 11:30 PM
+    envVars:
+      - key: API_BASE_URL
+        sync: false
+      - key: EMAIL
+        sync: false
+      - key: PASSWORD
+        sync: false
