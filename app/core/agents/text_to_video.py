@@ -52,9 +52,7 @@ PROMPT_NAME = "news-summary-tts-instructions"
 
 # Initialize Langfuse callback handler
 langfuse_handler = CallbackHandler(
-    secret_key=LANGFUSE_SECRET_KEY,
     public_key=LANGFUSE_PUBLIC_KEY,
-    host=LANGFUSE_HOST
 )
 
 langfuse_client = Langfuse(

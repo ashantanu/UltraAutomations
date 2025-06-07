@@ -265,9 +265,7 @@ async def generate_ai_news_summary(date: Optional[datetime] = None) -> FinalOutp
         # Run the graph
         logger.info("Invoking workflow graph")
         langfuse_handler = CallbackHandler(
-            secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
             public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
-            host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
         )
         logger.debug("Initialized Langfuse handler")
 

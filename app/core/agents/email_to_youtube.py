@@ -150,9 +150,7 @@ async def email_to_youtube(date: Optional[datetime] = None):
             "target_date": date
         }
         langfuse_handler = CallbackHandler(
-            secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
             public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
-            host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
         )
         
         # Run the graph
