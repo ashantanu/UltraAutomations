@@ -4,14 +4,29 @@ from supabase import create_client, Client
 import os
 import json
 from dotenv import load_dotenv
+from typing import Optional
 
 load_dotenv()
 
-# Initialize Supabase client
-supabase: Client = create_client(
-    os.getenv("SUPABASE_URL"),
-    os.getenv("SUPABASE_KEY")
-)
+supabase: Optional[Client] = None
+
+
+def _get_supabase() -> Client:
+    """
+    Lazily initialize Supabase so importing this module does not require env vars.
+    This makes local scripts/tests usable without SUPABASE_* configured.
+    """
+    global supabase
+    if supabase is not None:
+        return supabase
+
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_KEY")
+    if not url or not key:
+        raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be set")
+
+    supabase = create_client(url, key)
+    return supabase
 
 class AuthMiddleware:
     def __init__(self, app):
@@ -57,7 +72,15 @@ class AuthMiddleware:
                 )
 
             # Verify the token with Supabase
-            user = supabase.auth.get_user(token)
+            client = _get_supabase()
+            try:
+                user = client.auth.get_user(token)
+            except Exception:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Could not validate credentials",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
             if not user:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,

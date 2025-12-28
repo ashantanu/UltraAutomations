@@ -3,6 +3,7 @@ import json
 import os
 from datetime import datetime
 from dotenv import load_dotenv
+import pytest
 
 # Load environment variables
 load_dotenv()
@@ -31,7 +32,7 @@ def test_image_processing():
     required_vars = ["EMAIL", "PASSWORD"]
     missing_vars = [var for var in required_vars if not os.getenv(var)]
     if missing_vars:
-        raise Exception(f"Missing required environment variables: {', '.join(missing_vars)}")
+        pytest.skip(f"Missing required environment variables: {', '.join(missing_vars)}")
     
     try:
         # Step 1: Login and get token
