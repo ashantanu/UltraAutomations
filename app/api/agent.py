@@ -3,18 +3,13 @@ from pydantic import BaseModel, Field
 from app.core.agents.text_to_youtube import text_to_youtube
 from app.core.agents.ai_news_summarizer import generate_ai_news_summary
 from app.core.agents.email_to_youtube import email_to_youtube
-from langfuse.langchain import CallbackHandler
 from typing import Optional
 import os
 from datetime import datetime
 from app.utils.date_utils import get_pst_date
 
 router = APIRouter(tags=["agent"])
-
-# Initialize Langfuse handler
-langfuse_handler = CallbackHandler(
-    public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
-)
+logger = __import__("logging").getLogger(__name__)
 
 class YouTubeUploadRequest(BaseModel):
     text: str
@@ -24,9 +19,16 @@ class YouTubeUploadRequest(BaseModel):
 
 class EmailToYouTubeRequest(BaseModel):
     date: Optional[datetime] = Field(
-        default=get_pst_date(),
+        default_factory=get_pst_date,
         description="The date to process emails for. Defaults to today's PST date."
     )
+
+class EmailAvailabilityRequest(BaseModel):
+    date: Optional[datetime] = Field(
+        default=None,
+        description="If provided, checks for emails on that PST date. If omitted, checks last 24 hours."
+    )
+    max_results: int = Field(default=3, ge=1, le=20)
 
 @router.post("/text-to-youtube")
 async def youtube_upload(request: YouTubeUploadRequest):
@@ -110,3 +112,35 @@ async def email_to_youtube_endpoint(request: EmailToYouTubeRequest = None):
             "status": "error",
             "message": str(e)
         } 
+
+
+@router.post("/email-availability")
+async def email_availability_endpoint(request: EmailAvailabilityRequest):
+    """
+    Dry-run endpoint: probes Gmail and returns counts/samples for the configured sources.
+    Does not call OpenAI, does not generate video.
+    """
+    try:
+        from app.core.agents.ai_news_summarizer import probe_email_availability
+
+        report = probe_email_availability(
+            target_date=request.date,
+            max_results=request.max_results,
+        )
+        logger.info(
+            "Email availability check complete: date=%s total_found=%s",
+            request.date.isoformat() if request.date else None,
+            sum(item.get("count", 0) for item in report),
+        )
+        return {
+            "status": "success",
+            "data": {
+                "total_found": sum(item.get("count", 0) for item in report),
+                "by_source": report,
+            },
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
+        }

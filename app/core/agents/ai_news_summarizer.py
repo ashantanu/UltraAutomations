@@ -1,18 +1,14 @@
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, TypedDict, Union
 from pydantic import BaseModel, Field
-from openai import OpenAI
 from app.utils.gmail_oauth import get_emails_from_gmail
 from app.utils.logging_utils import get_logger
 from dotenv import load_dotenv
-from langgraph.graph import Graph, StateGraph, END
-from langfuse.langchain import CallbackHandler
-from langfuse import Langfuse
-from pydantic_ai import Agent
-import logfire
+from langgraph.graph import StateGraph, END
 from app.utils.date_utils import get_pst_date
-logfire.configure()
+from email.utils import parsedate_to_datetime
+import pytz
 
 
 # Initialize logger
@@ -26,18 +22,106 @@ MODEL_PROVIDER = "openai"
 AUDIO_SCRIPT_DELIMITER = "==="
 AUDIO_SCRIPT_ITEM_DELIMITER = "<item>"
 
-# Initialize clients
-openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-
-langfuse_client = Langfuse(
-    public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
-    secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
-    host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
-)
-
 # Constants
 SOURCES = ['news@smol.ai']
 PROMPT_NAME = "news_summarizer"  # Name of the prompt in Langfuse
+
+
+def _pst_tz():
+    return pytz.timezone("US/Pacific")
+
+
+def _compute_gmail_time_window(target_date: Optional[datetime]) -> tuple[int, int, str]:
+    """
+    Compute a Gmail search time window as epoch seconds.
+
+    - If target_date is provided, interpret it in PST and query that whole PST day.
+    - If target_date is None, query the last 24 hours (relative to PST "now").
+
+    Returns:
+        (after_epoch, before_epoch, human_label)
+    """
+    if target_date is not None:
+        pst_dt = get_pst_date(target_date)
+        start_of_day = pst_dt.astimezone(_pst_tz()).replace(hour=0, minute=0, second=0, microsecond=0)
+        start_next_day = start_of_day + timedelta(days=1)
+        return int(start_of_day.timestamp()), int(start_next_day.timestamp()), start_of_day.strftime("%Y-%m-%d PST")
+
+    now_pst = get_pst_date()
+    after = now_pst - timedelta(hours=24)
+    # "before" is optional; including it makes the query deterministic for debugging.
+    return int(after.timestamp()), int(now_pst.timestamp()) + 1, "last_24_hours"
+
+
+def build_gmail_query(source: str, target_date: Optional[datetime]) -> tuple[str, dict]:
+    """Build a Gmail query (and debug metadata) for a source + time window."""
+    after_epoch, before_epoch, window_label = _compute_gmail_time_window(target_date)
+    query = f"in:inbox from:{source} after:{after_epoch} before:{before_epoch}"
+    meta = {
+        "source": source,
+        "window": window_label,
+        "after_epoch": after_epoch,
+        "before_epoch": before_epoch,
+        "query": query,
+    }
+    return query, meta
+
+
+def probe_email_availability(
+    target_date: Optional[datetime],
+    sources: Optional[List[str]] = None,
+    max_results: int = 3,
+) -> List[dict]:
+    """
+    Lightweight Gmail probe used for dry-run/preflight.
+    Returns per-source counts + sample metadata (no OpenAI/Langfuse).
+    """
+    sources = sources or SOURCES
+    after_epoch, before_epoch, window_label = _compute_gmail_time_window(target_date)
+
+    missing = [
+        k
+        for k in ("GMAIL_REFRESH_TOKEN", "GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET")
+        if not os.getenv(k)
+    ]
+    if missing:
+        # Do not log secret values; only the variable names.
+        logger.error(
+            "Gmail probe cannot run (missing env vars): %s",
+            ", ".join(missing),
+        )
+        return [
+            {
+                "source": s,
+                "window": window_label,
+                "after_epoch": after_epoch,
+                "before_epoch": before_epoch,
+                "query": build_gmail_query(source=s, target_date=target_date)[0],
+                "count": 0,
+                "samples": [],
+                "error": f"missing_gmail_env:{','.join(missing)}",
+            }
+            for s in sources
+        ]
+
+    report: List[dict] = []
+    for source in sources:
+        query, meta = build_gmail_query(source=source, target_date=target_date)
+        logger.info("Gmail probe: source=%s window=%s query=%s", source, meta["window"], query)
+        emails = get_emails_from_gmail(query=query, max_results=max_results)
+        samples = [
+            {
+                "id": e.get("id"),
+                "subject": e.get("subject"),
+                "date": e.get("date"),
+                "sender": e.get("sender"),
+                "snippet": e.get("snippet"),
+                "body_len": len(e.get("body") or ""),
+            }
+            for e in emails
+        ]
+        report.append({**meta, "count": len(emails), "samples": samples})
+    return report
 
 
 class EmailContent(BaseModel):
@@ -105,37 +189,52 @@ def fetch_emails_node(state: AgentState) -> AgentState:
     """Node for fetching emails."""
     try:
         logger.info("Starting email fetch process")
-        # Calculate date range based on provided date or last 24 hours
-        end_date = state.get("target_date", get_pst_date())
-        
-        # Format date for Gmail query
-        date_query = f"after:{end_date.strftime('%Y/%m/%d')}"
-        logger.debug(f"Date query: {date_query}")
+        target_date = state.get("target_date")
+        after_epoch, before_epoch, window_label = _compute_gmail_time_window(target_date)
+        logger.info(
+            f"Gmail time window: {window_label} (after={after_epoch}, before={before_epoch})"
+        )
 
         all_emails = []
         for source in SOURCES:
-            logger.info(f"Fetching emails from source: {source} with query: {f'from:{source} {date_query}'}")
+            query, meta = build_gmail_query(source=source, target_date=target_date)
+            logger.info(f"Fetching emails: source={source} query={query}")
             # Get emails from each source
             emails = get_emails_from_gmail(
-                query=f'from:{source} {date_query}',
+                query=query,
                 max_results=10
             )
 
             # Convert to EmailContent model
             for email in emails:
+                # Be robust to Date header variants (comments, missing seconds, etc.)
+                parsed_dt = None
+                raw_date = (email.get("date") or "").strip()
+                if raw_date:
+                    try:
+                        parsed_dt = parsedate_to_datetime(raw_date)
+                    except Exception:
+                        parsed_dt = None
+                if parsed_dt is None:
+                    # Fallback to "now" in PST so the pipeline still runs (and logs show the bad header).
+                    logger.warning(f"Could not parse email Date header: {raw_date!r} (id={email.get('id')})")
+                    parsed_dt = get_pst_date()
+
                 all_emails.append(EmailContent(
                     sender=email['sender'],
                     subject=email['subject'],
-                    date=datetime.strptime(
-                        email['date'], '%a, %d %b %Y %H:%M:%S %z'),
+                    date=parsed_dt,
                     body=email['body'],
                     source=source
                 ))
             logger.info(f"Found {len(emails)} emails from {source}")
 
         if not all_emails:
-            logger.warning(f"No emails found for date: {end_date.strftime('%Y/%m/%d')}")
-            raise ValueError(f"No emails found for date: {end_date.strftime('%Y/%m/%d')}")
+            logger.warning(
+                "No emails found for requested window. "
+                "If you believe an email exists, verify the From address and timezone window."
+            )
+            raise ValueError("No emails found for requested window")
 
         logger.info(f"Total emails fetched: {len(all_emails)}")
         state["emails"] = all_emails
@@ -151,6 +250,10 @@ async def generate_summary_node(state: AgentState) -> AgentState:
     """Node for generating summary."""
     return_state = {}
     try:
+        # Lazy imports: keep "probe/dry-run" usable without Langfuse/Langchain extras.
+        from langfuse import Langfuse
+        from pydantic_ai import Agent
+
         logger.info("Starting summary generation")
         # Prepare email content for the prompt
         email_content = "\n\n".join([
@@ -170,6 +273,11 @@ async def generate_summary_node(state: AgentState) -> AgentState:
 
         # Get the prompt from Langfuse
         logger.info("Fetching prompt from Langfuse")
+        langfuse_client = Langfuse(
+            public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+            secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+            host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
+        )
         prompt_obj = langfuse_client.get_prompt(PROMPT_NAME)
         if not prompt_obj:
             logger.error(f"Prompt '{PROMPT_NAME}' not found in Langfuse")
@@ -211,7 +319,7 @@ async def generate_summary_node(state: AgentState) -> AgentState:
         return return_state
 
 
-def build_graph() -> Graph:
+def build_graph():
     """Build the LangGraph workflow."""
     logger.info("Building workflow graph")
     # Create the graph
@@ -264,15 +372,19 @@ async def generate_ai_news_summary(date: Optional[datetime] = None) -> FinalOutp
 
         # Run the graph
         logger.info("Invoking workflow graph")
-        langfuse_handler = CallbackHandler(
-            public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
-        )
-        logger.debug("Initialized Langfuse handler")
+        callbacks = []
+        try:
+            from langfuse.langchain import CallbackHandler  # type: ignore
+
+            callbacks = [CallbackHandler(public_key=os.getenv("LANGFUSE_PUBLIC_KEY"))]
+            logger.debug("Initialized Langfuse callback handler")
+        except Exception as e:
+            logger.info(f"Langfuse callback handler unavailable; continuing without callbacks ({e})")
 
         final_state = await graph.ainvoke(
             state,
             config={
-                "callbacks": [langfuse_handler],
+                "callbacks": callbacks,
                 "run_name": "ai_news_summary"
             }
         )

@@ -3,12 +3,11 @@ from datetime import datetime
 from typing import TypedDict, Optional
 from langgraph.graph import StateGraph, END
 from langfuse import observe
-from app.core.agents.ai_news_summarizer import generate_ai_news_summary
+from app.core.agents.ai_news_summarizer import generate_ai_news_summary, probe_email_availability
 from app.core.agents.text_to_youtube import text_to_youtube
 from app.utils.logging_utils import get_logger
 from app.utils.image_utils import add_text_overlay
 from app.utils.config import config
-from langfuse.langchain import CallbackHandler
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -139,6 +138,28 @@ async def email_to_youtube(date: Optional[datetime] = None):
         logger.info(f"Processing emails for date: {date.isoformat()}")
     
     try:
+        # Preflight: if there's truly no email for the window, skip the expensive pipeline.
+        availability = probe_email_availability(target_date=date, max_results=1)
+        for item in availability:
+            if item.get("error", "").startswith("missing_gmail_env:"):
+                raise Exception(f"Gmail credentials missing: {item['error']}")
+        for item in availability:
+            logger.info(
+                "Email preflight: source=%s window=%s count=%s query=%s",
+                item.get("source"),
+                item.get("window"),
+                item.get("count"),
+                item.get("query"),
+            )
+        total_found = sum(item.get("count", 0) for item in availability)
+        if total_found == 0:
+            logger.info("No matching emails found; skipping Email-to-YouTube flow.")
+            return {
+                "status": "skipped",
+                "reason": "no_emails",
+                "email_probe": availability,
+            }
+
         # Initialize state
         state: AgentState = {
             "summary": None,
@@ -149,14 +170,18 @@ async def email_to_youtube(date: Optional[datetime] = None):
             "create_playlist_if_not_exists": config.create_playlist_if_not_exists,
             "target_date": date
         }
-        langfuse_handler = CallbackHandler(
-            public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
-        )
-        
         # Run the graph
+        callbacks = []
+        try:
+            from langfuse.langchain import CallbackHandler  # type: ignore
+
+            callbacks = [CallbackHandler(public_key=os.getenv("LANGFUSE_PUBLIC_KEY"))]
+        except Exception as e:
+            logger.info(f"Langfuse callback handler unavailable; continuing without callbacks ({e})")
+
         final_state = await graph.ainvoke(state, 
             config={
-                "callbacks": [langfuse_handler],
+                "callbacks": callbacks,
                 "run_name": "email_to_youtube"
             })
         
