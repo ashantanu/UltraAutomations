@@ -9,6 +9,7 @@ from datetime import datetime
 from app.utils.date_utils import get_pst_date
 
 router = APIRouter(tags=["agent"])
+logger = __import__("logging").getLogger(__name__)
 
 class YouTubeUploadRequest(BaseModel):
     text: str
@@ -125,6 +126,11 @@ async def email_availability_endpoint(request: EmailAvailabilityRequest):
         report = probe_email_availability(
             target_date=request.date,
             max_results=request.max_results,
+        )
+        logger.info(
+            "Email availability check complete: date=%s total_found=%s",
+            request.date.isoformat() if request.date else None,
+            sum(item.get("count", 0) for item in report),
         )
         return {
             "status": "success",

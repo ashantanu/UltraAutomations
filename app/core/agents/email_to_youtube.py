@@ -143,6 +143,14 @@ async def email_to_youtube(date: Optional[datetime] = None):
         for item in availability:
             if item.get("error", "").startswith("missing_gmail_env:"):
                 raise Exception(f"Gmail credentials missing: {item['error']}")
+        for item in availability:
+            logger.info(
+                "Email preflight: source=%s window=%s count=%s query=%s",
+                item.get("source"),
+                item.get("window"),
+                item.get("count"),
+                item.get("query"),
+            )
         total_found = sum(item.get("count", 0) for item in availability)
         if total_found == 0:
             logger.info("No matching emails found; skipping Email-to-YouTube flow.")

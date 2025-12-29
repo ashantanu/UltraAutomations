@@ -76,26 +76,38 @@ def probe_email_availability(
     Lightweight Gmail probe used for dry-run/preflight.
     Returns per-source counts + sample metadata (no OpenAI/Langfuse).
     """
-    missing = [k for k in ("GMAIL_REFRESH_TOKEN", "GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET") if not os.getenv(k)]
+    sources = sources or SOURCES
+    after_epoch, before_epoch, window_label = _compute_gmail_time_window(target_date)
+
+    missing = [
+        k
+        for k in ("GMAIL_REFRESH_TOKEN", "GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET")
+        if not os.getenv(k)
+    ]
     if missing:
+        # Do not log secret values; only the variable names.
+        logger.error(
+            "Gmail probe cannot run (missing env vars): %s",
+            ", ".join(missing),
+        )
         return [
             {
                 "source": s,
-                "window": _compute_gmail_time_window(target_date)[2],
-                "after_epoch": _compute_gmail_time_window(target_date)[0],
-                "before_epoch": _compute_gmail_time_window(target_date)[1],
+                "window": window_label,
+                "after_epoch": after_epoch,
+                "before_epoch": before_epoch,
                 "query": build_gmail_query(source=s, target_date=target_date)[0],
                 "count": 0,
                 "samples": [],
                 "error": f"missing_gmail_env:{','.join(missing)}",
             }
-            for s in (sources or SOURCES)
+            for s in sources
         ]
 
-    sources = sources or SOURCES
     report: List[dict] = []
     for source in sources:
         query, meta = build_gmail_query(source=source, target_date=target_date)
+        logger.info("Gmail probe: source=%s window=%s query=%s", source, meta["window"], query)
         emails = get_emails_from_gmail(query=query, max_results=max_results)
         samples = [
             {
