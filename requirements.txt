@@ -1,6 +1,6 @@
 fastapi
 uvicorn
-python-dotenv==1.0.0
+python-dotenv>=1.0.0
 supabase
 python-multipart  # for file uploads
 
@@ -12,7 +12,7 @@ elevenlabs
 pydantic-ai-slim[openai]
 
 # utils
-moviepy==1.0.3
+moviepy>=2.0.0
 bs4
 pillow # for images
 requests # for downloading fonts
@@ -25,6 +25,6 @@ google-auth-oauthlib
 google-api-python-client 
 
 # tracing
-langfuse==3.0.0
+langfuse>=3.0.0
 logfire
 
