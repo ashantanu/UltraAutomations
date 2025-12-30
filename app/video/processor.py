@@ -50,8 +50,7 @@ class VideoProcessor:
 
             logger.info("Loading audio and image clips...")
             main_audio = AudioFileClip(str(input_data.main_audio_path))
-            image_clip = ImageClip(str(input_data.image_path)).set_duration(main_audio.duration)
-
+            image_clip = ImageClip(str(input_data.image_path), duration=main_audio.duration)
             # Handle background music if provided
             if input_data.background_music_path:
                 logger.info(f"Loading background music from: {input_data.background_music_path}")
