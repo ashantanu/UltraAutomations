@@ -1,46 +1,77 @@
+"""
+AI News Summarizer - Simplified
+
+Fetches emails and generates AI summaries without LangGraph complexity.
+"""
+
 import os
 from datetime import datetime, timedelta
-from typing import List, Optional, TypedDict, Union
+from typing import List, Optional, Union
 from pydantic import BaseModel, Field
-from app.utils.gmail_oauth import get_emails_from_gmail
-from app.utils.logging_utils import get_logger
-from dotenv import load_dotenv
-from langgraph.graph import StateGraph, END
-from app.utils.date_utils import get_pst_date
 from email.utils import parsedate_to_datetime
 import pytz
+from dotenv import load_dotenv
 
+from app.utils.gmail_oauth import get_emails_from_gmail
+from app.utils.logging_utils import get_logger
+from app.utils.date_utils import get_pst_date
 
-# Initialize logger
 logger = get_logger(__name__)
-
-# Load environment variables
 load_dotenv()
+
+# Configuration
 EMAIL_BODY_CHAR_LIMIT = 2000
-MODEL = 'openai:gpt-4.1'
-MODEL_PROVIDER = "openai"
+MODEL = 'openai:gpt-5.2'
+SOURCES = ['news@smol.ai']
+PROMPT_NAME = "news_summarizer"
 AUDIO_SCRIPT_DELIMITER = "==="
 AUDIO_SCRIPT_ITEM_DELIMITER = "<item>"
-
-# Constants
-SOURCES = ['news@smol.ai']
-PROMPT_NAME = "news_summarizer"  # Name of the prompt in Langfuse
 
 
 def _pst_tz():
     return pytz.timezone("US/Pacific")
 
 
+# =============================================================================
+# Pydantic Models
+# =============================================================================
+
+class EmailContent(BaseModel):
+    """Structured email content."""
+    sender: str
+    subject: str
+    date: datetime
+    body: str
+    source: str
+
+
+class AudioScriptModel(BaseModel):
+    """Audio script with structured sections."""
+    opening: str
+    news_items: List[str]
+    closing: str
+
+
+class SummaryOutput(BaseModel):
+    """AI-generated summary output."""
+    title: str = Field(..., description="Title in format 'OFA Daily Summary [DATE]'")
+    audio_script: Union[AudioScriptModel, str] = Field(..., description="Podcast script")
+    description: str = Field(..., description="YouTube description with citations")
+
+
+class FinalOutput(BaseModel):
+    """Final pipeline output."""
+    date: datetime
+    emails_processed: int
+    summary: SummaryOutput
+
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
 def _compute_gmail_time_window(target_date: Optional[datetime]) -> tuple[int, int, str]:
-    """
-    Compute a Gmail search time window as epoch seconds.
-
-    - If target_date is provided, interpret it in PST and query that whole PST day.
-    - If target_date is None, query the last 24 hours (relative to PST "now").
-
-    Returns:
-        (after_epoch, before_epoch, human_label)
-    """
+    """Compute Gmail search time window as epoch seconds."""
     if target_date is not None:
         pst_dt = get_pst_date(target_date)
         start_of_day = pst_dt.astimezone(_pst_tz()).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -49,12 +80,11 @@ def _compute_gmail_time_window(target_date: Optional[datetime]) -> tuple[int, in
 
     now_pst = get_pst_date()
     after = now_pst - timedelta(hours=24)
-    # "before" is optional; including it makes the query deterministic for debugging.
     return int(after.timestamp()), int(now_pst.timestamp()) + 1, "last_24_hours"
 
 
 def build_gmail_query(source: str, target_date: Optional[datetime]) -> tuple[str, dict]:
-    """Build a Gmail query (and debug metadata) for a source + time window."""
+    """Build a Gmail query for a source + time window."""
     after_epoch, before_epoch, window_label = _compute_gmail_time_window(target_date)
     query = f"in:inbox from:{source} after:{after_epoch} before:{before_epoch}"
     meta = {
@@ -67,35 +97,40 @@ def build_gmail_query(source: str, target_date: Optional[datetime]) -> tuple[str
     return query, meta
 
 
+def format_audio_script(script: AudioScriptModel) -> str:
+    """Format AudioScriptModel into delimited string."""
+    formatted_items = "\n".join(
+        f"{AUDIO_SCRIPT_ITEM_DELIMITER} {item}" for item in script.news_items
+    )
+    return f"{script.opening}\n{AUDIO_SCRIPT_DELIMITER}\n{formatted_items}\n{AUDIO_SCRIPT_DELIMITER}\n{script.closing}"
+
+
+# =============================================================================
+# Core Functions
+# =============================================================================
+
 def probe_email_availability(
     target_date: Optional[datetime],
     sources: Optional[List[str]] = None,
     max_results: int = 3,
 ) -> List[dict]:
     """
-    Lightweight Gmail probe used for dry-run/preflight.
-    Returns per-source counts + sample metadata (no OpenAI/Langfuse).
+    Lightweight Gmail probe for dry-run/preflight.
+    Returns per-source counts without calling OpenAI.
     """
     sources = sources or SOURCES
     after_epoch, before_epoch, window_label = _compute_gmail_time_window(target_date)
 
     missing = [
-        k
-        for k in ("GMAIL_REFRESH_TOKEN", "GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET")
+        k for k in ("GMAIL_REFRESH_TOKEN", "GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET")
         if not os.getenv(k)
     ]
     if missing:
-        # Do not log secret values; only the variable names.
-        logger.error(
-            "Gmail probe cannot run (missing env vars): %s",
-            ", ".join(missing),
-        )
+        logger.error("Gmail probe missing env vars: %s", ", ".join(missing))
         return [
             {
                 "source": s,
                 "window": window_label,
-                "after_epoch": after_epoch,
-                "before_epoch": before_epoch,
                 "query": build_gmail_query(source=s, target_date=target_date)[0],
                 "count": 0,
                 "samples": [],
@@ -104,10 +139,10 @@ def probe_email_availability(
             for s in sources
         ]
 
-    report: List[dict] = []
+    report = []
     for source in sources:
         query, meta = build_gmail_query(source=source, target_date=target_date)
-        logger.info("Gmail probe: source=%s window=%s query=%s", source, meta["window"], query)
+        logger.info("Gmail probe: source=%s query=%s", source, query)
         emails = get_emails_from_gmail(query=query, max_results=max_results)
         samples = [
             {
@@ -124,290 +159,114 @@ def probe_email_availability(
     return report
 
 
-class EmailContent(BaseModel):
-    """Model for structured email content."""
-    sender: str
-    subject: str
-    date: datetime
-    body: str
-    source: str = Field(...,
-                        description="Source of the email (smol.ai or alphasignal.ai)")
+def fetch_emails(target_date: Optional[datetime] = None) -> List[EmailContent]:
+    """Fetch emails from configured sources."""
+    logger.info("📧 Fetching emails...")
+    after_epoch, before_epoch, window_label = _compute_gmail_time_window(target_date)
+    logger.info(f"Time window: {window_label}")
+
+    all_emails = []
+    for source in SOURCES:
+        query, _ = build_gmail_query(source=source, target_date=target_date)
+        logger.info(f"Querying: {query}")
+        
+        emails = get_emails_from_gmail(query=query, max_results=10)
+        
+        for email in emails:
+            # Parse date robustly
+            parsed_dt = None
+            raw_date = (email.get("date") or "").strip()
+            if raw_date:
+                try:
+                    parsed_dt = parsedate_to_datetime(raw_date)
+                except Exception:
+                    pass
+            if parsed_dt is None:
+                logger.warning(f"Could not parse date: {raw_date!r}")
+                parsed_dt = get_pst_date()
+
+            all_emails.append(EmailContent(
+                sender=email['sender'],
+                subject=email['subject'],
+                date=parsed_dt,
+                body=email['body'],
+                source=source
+            ))
+        
+        logger.info(f"Found {len(emails)} emails from {source}")
+
+    if not all_emails:
+        raise ValueError("No emails found for requested window")
+
+    logger.info(f"✅ Total emails fetched: {len(all_emails)}")
+    return all_emails
 
 
-class AudioScriptModel(BaseModel):
-    """Model for the audio script."""
-    opening: str = Field(..., description="Opening statement")
-    news_items: List[str] = Field(..., description="List of news items")
-    closing: str = Field(..., description="Closing statement")
+async def generate_summary(emails: List[EmailContent]) -> SummaryOutput:
+    """Generate AI summary from emails using Pydantic AI."""
+    from langfuse import Langfuse
+    from pydantic_ai import Agent
 
+    logger.info("🤖 Generating AI summary...")
 
-class SummaryOutput(BaseModel):
-    """Model for the OpenAI-generated summary."""
-    title: str = Field(...,
-                       description="Title of the summary in format 'OFA Daily Summary [DATE]'")
-    audio_script: Union[AudioScriptModel, str] = Field(
-        ..., description="5-minute podcast script summarizing the key points")
-    description: str = Field(...,
-                             description="YouTube video description with citations")
+    # Prepare email content
+    email_content = "\n\n".join([
+        f"From: {email.source}\n"
+        f"Subject: {email.subject}\n"
+        f"Date: {email.date}\n"
+        f"Content: {email.body[:EMAIL_BODY_CHAR_LIMIT] + ('...' if len(email.body) > EMAIL_BODY_CHAR_LIMIT else '')}"
+        for email in emails
+    ])
 
+    if not email_content:
+        raise ValueError("No email content to process")
 
-def format_audio_script(script: AudioScriptModel) -> str:
-    """Format an AudioScriptModel into a structured string with delimiters.
+    # Get prompt from Langfuse
+    langfuse = Langfuse(
+        public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+        secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+        host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
+    )
+    prompt_obj = langfuse.get_prompt(PROMPT_NAME)
+    if not prompt_obj:
+        raise ValueError(f"Prompt '{PROMPT_NAME}' not found in Langfuse")
 
-    Args:
-        script: AudioScriptModel instance containing opening, news items, and closing
+    # Generate summary
+    agent = Agent(MODEL, output_type=SummaryOutput, instructions=prompt_obj.prompt, instrument=True)
+    result = await agent.run(f"\n\nemail_content: {email_content}\n\nGenerate the script as per the instructions.")
+    summary = result.output
 
-    Returns:
-        Formatted string with opening, news items list, and closing separated by delimiters
-    """
-    if not isinstance(script, AudioScriptModel):
-        raise TypeError("Input must be an AudioScriptModel instance")
+    # Format audio script if structured
+    if isinstance(summary.audio_script, AudioScriptModel):
+        summary.audio_script = format_audio_script(summary.audio_script)
 
-    formatted_items = "\n".join(
-        f"{AUDIO_SCRIPT_ITEM_DELIMITER} {item}" for item in script.news_items)
-
-    return f"{script.opening}\n{AUDIO_SCRIPT_DELIMITER}\n{formatted_items}\n{AUDIO_SCRIPT_DELIMITER}\n{script.closing}"
-
-
-class FinalOutput(BaseModel):
-    """Model for the final combined output."""
-    date: datetime
-    emails_processed: int
-    summary: SummaryOutput
-
-
-class AgentState(TypedDict):
-    """State for the LangGraph agent."""
-    emails: List[EmailContent]
-    summary: Optional[SummaryOutput]
-    error: Optional[str]
-    trace_id: str
-    target_date: Optional[datetime]
-
-
-def fetch_emails_node(state: AgentState) -> AgentState:
-    """Node for fetching emails."""
-    try:
-        logger.info("Starting email fetch process")
-        target_date = state.get("target_date")
-        after_epoch, before_epoch, window_label = _compute_gmail_time_window(target_date)
-        logger.info(
-            f"Gmail time window: {window_label} (after={after_epoch}, before={before_epoch})"
-        )
-
-        all_emails = []
-        for source in SOURCES:
-            query, meta = build_gmail_query(source=source, target_date=target_date)
-            logger.info(f"Fetching emails: source={source} query={query}")
-            # Get emails from each source
-            emails = get_emails_from_gmail(
-                query=query,
-                max_results=10
-            )
-
-            # Convert to EmailContent model
-            for email in emails:
-                # Be robust to Date header variants (comments, missing seconds, etc.)
-                parsed_dt = None
-                raw_date = (email.get("date") or "").strip()
-                if raw_date:
-                    try:
-                        parsed_dt = parsedate_to_datetime(raw_date)
-                    except Exception:
-                        parsed_dt = None
-                if parsed_dt is None:
-                    # Fallback to "now" in PST so the pipeline still runs (and logs show the bad header).
-                    logger.warning(f"Could not parse email Date header: {raw_date!r} (id={email.get('id')})")
-                    parsed_dt = get_pst_date()
-
-                all_emails.append(EmailContent(
-                    sender=email['sender'],
-                    subject=email['subject'],
-                    date=parsed_dt,
-                    body=email['body'],
-                    source=source
-                ))
-            logger.info(f"Found {len(emails)} emails from {source}")
-
-        if not all_emails:
-            logger.warning(
-                "No emails found for requested window. "
-                "If you believe an email exists, verify the From address and timezone window."
-            )
-            raise ValueError("No emails found for requested window")
-
-        logger.info(f"Total emails fetched: {len(all_emails)}")
-        state["emails"] = all_emails
-        return state
-
-    except Exception as e:
-        logger.error(f"Error in fetch_emails_node: {str(e)}", exc_info=True)
-        state["error"] = str(e)
-        return state
-
-
-async def generate_summary_node(state: AgentState) -> AgentState:
-    """Node for generating summary."""
-    return_state = {}
-    try:
-        # Lazy imports: keep "probe/dry-run" usable without Langfuse/Langchain extras.
-        from langfuse import Langfuse
-        from pydantic_ai import Agent
-
-        logger.info("Starting summary generation")
-        # Prepare email content for the prompt
-        email_content = "\n\n".join([
-            f"From: {email.source}\n"
-            f"Subject: {email.subject}\n"
-            f"Date: {email.date}\n"
-            f"Content: {email.body[:EMAIL_BODY_CHAR_LIMIT] + ('...' if len(email.body) > EMAIL_BODY_CHAR_LIMIT else '')}"
-            for email in state["emails"]
-        ])
-        logger.debug(
-            f"Prepared email content with {len(state['emails'])} emails")
-        logger.debug(f"Email content length: {len(email_content)} characters")
-
-        if not email_content:
-            logger.warning("No email content to process")
-            return {}
-
-        # Get the prompt from Langfuse
-        logger.info("Fetching prompt from Langfuse")
-        langfuse_client = Langfuse(
-            public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
-            secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
-            host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
-        )
-        prompt_obj = langfuse_client.get_prompt(PROMPT_NAME)
-        if not prompt_obj:
-            logger.error(f"Prompt '{PROMPT_NAME}' not found in Langfuse")
-            raise ValueError(f"Prompt '{PROMPT_NAME}' not found in Langfuse")
-
-        logger.info(f"Retrieved prompt from Langfuse: {PROMPT_NAME}")
-
-        # Format the prompt with the email content
-        formatted_prompt = prompt_obj.prompt
-        logger.debug(
-            f"Formatted prompt length: {len(formatted_prompt)} characters")
-
-        # Use Pydantic AI to get structured output
-        logger.info("Generating summary using Pydantic AI")
-        logger.debug(f"Initialized Pydantic AI agent with model: {MODEL}")
-        agent = Agent(MODEL, output_type=SummaryOutput, instructions=formatted_prompt, instrument=True)
-        result = await agent.run(f"\n\nemail_content: {email_content}\n\nGenerate the script as per the instructions.")
-        result = result.output
-
-        logger.info("Successfully generated summary")
-        logger.debug(f"Generated title: {result.title}")
-
-        # Format the audio script if it's an AudioScriptModel
-        if isinstance(result.audio_script, AudioScriptModel):
-            logger.debug("Formatting audio script with delimiters")
-            result.audio_script = format_audio_script(
-                result.audio_script)
-
-        logger.debug(
-            f"Audio script formatted: {result.audio_script[:100]}...")
-
-        return_state["summary"] = result
-        return return_state
-
-    except Exception as e:
-        logger.error(
-            f"Error in generate_summary_node: {str(e)}", exc_info=True)
-        return_state["error"] = str(e)
-        return return_state
-
-
-def build_graph():
-    """Build the LangGraph workflow."""
-    logger.info("Building workflow graph")
-    # Create the graph
-    workflow = StateGraph(AgentState)
-
-    # Add nodes
-    workflow.add_node("fetch_emails", fetch_emails_node)
-    workflow.add_node("generate_summary", generate_summary_node)
-
-    # Add edges
-    workflow.add_edge("fetch_emails", "generate_summary")
-    workflow.add_edge("generate_summary", END)
-
-    # Set entry point
-    workflow.set_entry_point("fetch_emails")
-
-    # Compile the graph
-    logger.info("Compiling workflow graph")
-    return workflow.compile()
-
-
-# Initialize the graph
-graph = build_graph()
+    logger.info(f"✅ Summary generated: {summary.title}")
+    return summary
 
 
 async def generate_ai_news_summary(date: Optional[datetime] = None) -> FinalOutput:
     """
-    Generate the daily AI news summary.
-
+    Main entry point: fetch emails and generate AI summary.
+    
     Args:
-        date (Optional[datetime]): The date to process emails for. If not provided,
-            defaults to the last 24 hours.
-
+        date: Target date for emails. Defaults to last 24 hours.
+    
     Returns:
-        FinalOutput containing the summary and metadata
+        FinalOutput with summary and metadata.
     """
-    logger.info("Starting AI news summary generation")
-    try:
-        # Initialize state with optional date
-        state: AgentState = {
-            "emails": [],
-            "summary": None,
-            "error": None,
-            "trace_id": None,
-            "target_date": date
-        }
-        logger.debug("Initialized agent state")
-        if date:
-            logger.info(f"Processing emails for date: {date.isoformat()}")
-
-        # Run the graph
-        logger.info("Invoking workflow graph")
-        callbacks = []
-        try:
-            from langfuse.langchain import CallbackHandler  # type: ignore
-
-            callbacks = [CallbackHandler(public_key=os.getenv("LANGFUSE_PUBLIC_KEY"))]
-            logger.debug("Initialized Langfuse callback handler")
-        except Exception as e:
-            logger.info(f"Langfuse callback handler unavailable; continuing without callbacks ({e})")
-
-        final_state = await graph.ainvoke(
-            state,
-            config={
-                "callbacks": callbacks,
-                "run_name": "ai_news_summary"
-            }
-        )
-        logger.debug(f"Graph execution completed. State: {final_state}")
-
-        if final_state["error"]:
-            logger.error(f"Error in workflow: {final_state['error']}")
-            raise Exception(final_state["error"])
-
-        # Create final output
-        output = FinalOutput(
-            date=date or get_pst_date(),
-            emails_processed=len(final_state["emails"]),
-            summary=final_state["summary"]
-        )
-        logger.debug(
-            f"Created final output with {output.emails_processed} emails processed")
-
-        logger.info(
-            f"Successfully generated summary with {output.emails_processed} emails processed")
-        return output
-
-    except Exception as e:
-        logger.error(
-            f"Failed to generate daily summary: {str(e)}", exc_info=True)
-        raise Exception(f"Failed to generate daily summary: {str(e)}")
+    logger.info("🚀 Starting AI news summary generation...")
+    
+    # Step 1: Fetch emails
+    emails = fetch_emails(target_date=date)
+    
+    # Step 2: Generate summary
+    summary = await generate_summary(emails)
+    
+    output = FinalOutput(
+        date=date or get_pst_date(),
+        emails_processed=len(emails),
+        summary=summary
+    )
+    
+    logger.info(f"🎉 Summary complete: {output.emails_processed} emails processed")
+    return output

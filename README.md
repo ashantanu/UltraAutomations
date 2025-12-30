@@ -226,30 +226,32 @@ Each email in the returned list contains:
 - `body`: Email body text
 - `snippet`: A short preview of the email content
 
-### Text-to-YouTube Agent
-The text-to-youtube agent combines text-to-video generation with YouTube upload in a single flow:
+### Video Generation
+
+Generate videos from text using the simplified pipeline script:
+
+```bash
+# From text input
+python scripts/generate_video.py --text "Your script here" --title "Video Title" --upload
+
+# From email (daily AI news summary)
+python scripts/generate_video.py --from-email --upload
+```
+
+Or use programmatically:
 
 ```python
-from app.core.agents.text_to_youtube import text_to_youtube
+from scripts.generate_video import generate_video_pipeline
 
-result = text_to_youtube(
+result = generate_video_pipeline(
     text="Your text content here",
     title="Video Title",
-    description="Video Description"
+    description="Video Description",
+    upload=True
 )
 
 # Result includes:
-{
-    "status": "success",
-    "video_path": "path/to/generated/video.mp4",
-    "title": "Video Title",
-    "description": "Video Description",
-    "youtube_video_id": "youtube_video_id",
-    "youtube_video_url": "https://www.youtube.com/watch?v=youtube_video_id",
-    "upload_details": {
-        # Additional upload details from YouTube API
-    }
-}
+# result.success, result.video_path, result.youtube_video_id, result.youtube_url
 ```
 
 For detailed YouTube upload functionality documentation, see [README_YOUTUBE.md](README_YOUTUBE.md).
@@ -276,7 +278,7 @@ A server for generating AI news summaries from email newsletters.
 - Fetches emails from Gmail using OAuth2
 - Generates AI-powered news summaries
 - Creates podcast scripts and YouTube descriptions
-- Uses LangGraph for workflow orchestration
+- Simple, linear pipeline for video generation
 - Integrates with Langfuse for prompt management and tracing
 
 ## Prerequisites

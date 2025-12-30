@@ -1,15 +1,20 @@
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
-from app.core.agents.text_to_youtube import text_to_youtube
-from app.core.agents.ai_news_summarizer import generate_ai_news_summary
-from app.core.agents.email_to_youtube import email_to_youtube
 from typing import Optional
-import os
 from datetime import datetime
+import logging
+import sys
+from pathlib import Path
+
+# Add scripts to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts"))
+
 from app.utils.date_utils import get_pst_date
+from app.core.agents.ai_news_summarizer import generate_ai_news_summary, probe_email_availability
 
 router = APIRouter(tags=["agent"])
-logger = __import__("logging").getLogger(__name__)
+logger = logging.getLogger(__name__)
+
 
 class YouTubeUploadRequest(BaseModel):
     text: str
@@ -17,11 +22,13 @@ class YouTubeUploadRequest(BaseModel):
     description: str
     thumbnail_path: Optional[str] = None
 
+
 class EmailToYouTubeRequest(BaseModel):
     date: Optional[datetime] = Field(
         default_factory=get_pst_date,
         description="The date to process emails for. Defaults to today's PST date."
     )
+
 
 class EmailAvailabilityRequest(BaseModel):
     date: Optional[datetime] = Field(
@@ -30,42 +37,47 @@ class EmailAvailabilityRequest(BaseModel):
     )
     max_results: int = Field(default=3, ge=1, le=20)
 
+
 @router.post("/text-to-youtube")
 async def youtube_upload(request: YouTubeUploadRequest):
     """
-    Endpoint to convert text to video and upload to YouTube.
-    
-    Args:
-        request (YouTubeUploadRequest): The request containing text, title, and description
-        
-    Returns:
-        dict: A dictionary containing the result of the operation
+    Convert text to video and upload to YouTube.
     """
     try:
-        result = text_to_youtube(
+        from generate_video import generate_video_pipeline
+        
+        result = generate_video_pipeline(
             text=request.text,
             title=request.title,
             description=request.description,
-            thumbnail_path=request.thumbnail_path
+            thumbnail_path=request.thumbnail_path,
+            upload=True
         )
+        
+        if not result.success:
+            raise Exception(result.error)
+        
         return {
             "status": "success",
             "message": "Video uploaded successfully",
-            "data": result
+            "data": {
+                "video_path": result.video_path,
+                "youtube_video_id": result.youtube_video_id,
+                "youtube_video_url": result.youtube_url,
+            }
         }
     except Exception as e:
+        logger.error(f"text-to-youtube failed: {e}", exc_info=True)
         return {
             "status": "error",
             "message": str(e)
         }
 
+
 @router.post("/news-summary")
 async def news_summary():
     """
-    Endpoint to generate daily AI news summary.
-    
-    Returns:
-        dict: A dictionary containing the summary and metadata
+    Generate daily AI news summary from emails.
     """
     try:
         result = await generate_ai_news_summary()
@@ -83,63 +95,72 @@ async def news_summary():
             }
         }
     except Exception as e:
+        logger.error(f"news-summary failed: {e}", exc_info=True)
         return {
             "status": "error",
             "message": str(e)
         }
 
+
 @router.post("/email-to-youtube")
 async def email_to_youtube_endpoint(request: EmailToYouTubeRequest = None):
     """
-    Endpoint to generate a YouTube video from email summaries.
-    
-    Args:
-        request (EmailToYouTubeRequest, optional): The request containing the date to process.
-            If not provided, defaults to the last 24 hours.
-    
-    Returns:
-        dict: A dictionary containing the summary and video details
+    Generate a YouTube video from email summaries.
     """
     try:
-        result = await email_to_youtube(date=request.date if request else None)
+        from generate_video import email_to_video_pipeline
+        
+        result = await email_to_video_pipeline(
+            upload=True,
+            target_date=request.date if request else None
+        )
+        
+        if not result.success:
+            raise Exception(result.error)
+        
         return {
             "status": "success",
             "message": "Email-to-YouTube flow completed successfully",
-            "data": result
+            "data": {
+                "video_path": result.video_path,
+                "youtube_video_id": result.youtube_video_id,
+                "youtube_url": result.youtube_url,
+                "duration_seconds": result.duration_seconds
+            }
         }
     except Exception as e:
+        logger.error(f"email-to-youtube failed: {e}", exc_info=True)
         return {
             "status": "error",
             "message": str(e)
-        } 
+        }
 
 
 @router.post("/email-availability")
 async def email_availability_endpoint(request: EmailAvailabilityRequest):
     """
-    Dry-run endpoint: probes Gmail and returns counts/samples for the configured sources.
-    Does not call OpenAI, does not generate video.
+    Dry-run: probe Gmail for email counts without generating video.
     """
     try:
-        from app.core.agents.ai_news_summarizer import probe_email_availability
-
         report = probe_email_availability(
             target_date=request.date,
             max_results=request.max_results,
         )
+        total_found = sum(item.get("count", 0) for item in report)
         logger.info(
-            "Email availability check complete: date=%s total_found=%s",
+            "Email availability check: date=%s total=%s",
             request.date.isoformat() if request.date else None,
-            sum(item.get("count", 0) for item in report),
+            total_found,
         )
         return {
             "status": "success",
             "data": {
-                "total_found": sum(item.get("count", 0) for item in report),
+                "total_found": total_found,
                 "by_source": report,
             },
         }
     except Exception as e:
+        logger.error(f"email-availability failed: {e}", exc_info=True)
         return {
             "status": "error",
             "message": str(e),

@@ -1,26 +1,34 @@
 services:
-  # A Docker web service
-  - type: web
-    name: ofa-server
-    env: python
+  # Daily video generation cron job (runs script directly, no server needed)
+  - type: cron
+    name: daily-video-generator
+    runtime: python
     region: oregon
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: python scripts/generate_video.py --from-email --upload
+    schedule: "30 7 * * *"  # 7:30 AM UTC = 11:30 PM PST
     envVars:
+      # OpenAI
       - key: OPENAI_API_KEY
         sync: false
-
-  # Cron job to run the upload_video.py script
-  - type: cron
-    name: youtube-uploader-cron
-    env: python
-    buildCommand: pip install -r requirements.txt # Assuming requirements.txt contains necessary dependencies
-    startCommand: python jobs/create_summary_job.py
-    schedule: "30 7 * * *" # Run daily at 11:30 PM PST
-    envVars:
-      - key: API_BASE_URL
+      # Gmail OAuth
+      - key: GMAIL_CLIENT_ID
         sync: false
-      - key: EMAIL
+      - key: GMAIL_CLIENT_SECRET
         sync: false
-      - key: PASSWORD
+      - key: GMAIL_REFRESH_TOKEN
+        sync: false
+      # YouTube OAuth
+      - key: YOUTUBE_CLIENT_ID
+        sync: false
+      - key: YOUTUBE_CLIENT_SECRET
+        sync: false
+      - key: YOUTUBE_REFRESH_TOKEN
+        sync: false
+      # Langfuse (for prompts)
+      - key: LANGFUSE_PUBLIC_KEY
+        sync: false
+      - key: LANGFUSE_SECRET_KEY
+        sync: false
+      - key: LANGFUSE_HOST
         sync: false

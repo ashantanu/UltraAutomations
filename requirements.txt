@@ -5,8 +5,6 @@ supabase
 python-multipart  # for file uploads
 
 # AI dependencies
-langchain
-langgraph
 openai
 elevenlabs
 pydantic-ai-slim[openai]
