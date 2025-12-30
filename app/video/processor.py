@@ -1,6 +1,6 @@
 from typing import Optional
 from pathlib import Path
-from moviepy.editor import ImageClip, AudioFileClip, CompositeAudioClip
+from moviepy import ImageClip, AudioFileClip, CompositeAudioClip
 from app.utils.logging_utils import get_logger
 from app.video.models import VideoConfig, AudioConfig, VideoInput, VideoProcessingResult
 from app.video.utils import validate_paths_and_permissions, get_ffmpeg_params
