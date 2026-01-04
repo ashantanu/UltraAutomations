@@ -22,7 +22,7 @@ load_dotenv()
 # Configuration
 EMAIL_BODY_CHAR_LIMIT = 2000
 MODEL = 'openai:gpt-5.2'
-SOURCES = ['news@smol.ai']
+SOURCES = ['news@smol.ai', 'a.shantanu08@gmail.com']
 PROMPT_NAME = "news_summarizer"
 AUDIO_SCRIPT_DELIMITER = "==="
 AUDIO_SCRIPT_ITEM_DELIMITER = "<item>"
