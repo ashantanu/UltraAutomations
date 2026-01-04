@@ -69,20 +69,20 @@ class VideoProcessor:
 
                     # Adjust volumes and create composite audio
                     logger.info(f"Adjusting audio volumes - Main: {self.audio_config.main_audio_volume}x, Background: {self.audio_config.background_music_volume}x")
-                    main_audio = main_audio.volumex(self.audio_config.main_audio_volume)
-                    background_music = background_music.volumex(self.audio_config.background_music_volume)
+                    main_audio = main_audio.with_volume_scaled(self.audio_config.main_audio_volume)
+                    background_music = background_music.with_volume_scaled(self.audio_config.background_music_volume)
                     final_audio = CompositeAudioClip([main_audio, background_music])
                     logger.info("Composite audio created successfully with background music")
                 except Exception as e:
                     logger.error(f"Error processing background music: {str(e)}", exc_info=True)
                     logger.warning("Falling back to main audio only")
-                    final_audio = main_audio.volumex(self.audio_config.main_audio_volume)
+                    final_audio = main_audio.with_volume_scaled(self.audio_config.main_audio_volume)
             else:
                 logger.info("No background music provided, using main audio only")
-                final_audio = main_audio.volumex(self.audio_config.main_audio_volume)
+                final_audio = main_audio.with_volume_scaled(self.audio_config.main_audio_volume)
 
             # Set audio to image clip
-            image_clip = image_clip.set_audio(final_audio)
+            image_clip = image_clip.with_audio(final_audio)
 
             logger.info("Writing video file...")
             image_clip.write_videofile(
@@ -94,8 +94,7 @@ class VideoProcessor:
                 threads=self.video_config.threads,
                 bitrate=self.video_config.video_bitrate,
                 audio_bitrate=self.video_config.audio_bitrate,
-                verbose=True,
-                logger=None,
+                logger='bar',
                 ffmpeg_params=get_ffmpeg_params()
             )
 
